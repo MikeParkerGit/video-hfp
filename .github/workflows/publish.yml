@@ -33,7 +33,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: demo/clips
-          key: clips-${{ hashFiles('tools/make-test-clips.sh') }}
+          key: clips-${{ hashFiles('tools/make-test-clips.sh', 'tools/frame-labels.mjs', 'tools/pack.js', 'src/demux/**', 'src/clip.js', 'src/loader.js', 'src/budget.js') }}
       - run: test -f demo/clips/A.mp4 || npm run clips
       - run: npm test
       - run: npm publish --provenance --access public --tag "$TAG"
