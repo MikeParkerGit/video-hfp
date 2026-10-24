@@ -1,0 +1,21 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: cache test clips
+        uses: actions/cache@v4
+        with:
+          path: demo/clips
+          key: clips-${{ hashFiles('tools/make-test-clips.sh', 'tools/frame-labels.mjs', 'tools/pack.js', 'src/demux/**', 'src/clip.js', 'src/loader.js', 'src/budget.js') }}
+      - run: test -f demo/clips/A.mp4 || npm run clips
+      - run: npm test
+      - name: headless chromium
+        run: npx --yes playwright@1.50.1 install --with-deps chromium-headless-shell
+      - name: playback test
+        run: npm run test:playback

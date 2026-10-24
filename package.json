@@ -1,0 +1,57 @@
+{
+  "name": "video-hfp",
+  "version": "0.2.0-beta.1",
+  "description": "video-hfp — high frame precision video for the web: a <video>-shaped element on WebCodecs with frame-exact verbs — seamless loops, frame-exact cuts, prepared targets that land on the next display frame — on ordinary files",
+  "author": "Michael Parker",
+  "license": "MIT",
+  "type": "module",
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    },
+    "./element": {
+      "types": "./src/index.d.ts",
+      "default": "./src/element.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": [
+    "./src/element.js"
+  ],
+  "files": [
+    "src",
+    "tools/pack.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node test/smoke.mjs",
+    "test:playback": "node test/playback.mjs",
+    "clips": "bash tools/make-test-clips.sh",
+    "serve": "node tools/serve.js"
+  },
+  "keywords": [
+    "webcodecs",
+    "video",
+    "frame-accurate",
+    "custom-element",
+    "loop",
+    "player"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MikeParkerGit/video-hfp.git"
+  },
+  "homepage": "https://github.com/MikeParkerGit/video-hfp#readme",
+  "bugs": {
+    "url": "https://github.com/MikeParkerGit/video-hfp/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -1,0 +1,23 @@
+<!doctype html><meta charset="utf-8"><title>video-hfp — play() before a gesture</title>
+<!-- play() on a clip WITH audio before a gesture must reject with NotAllowedError (and fire `blocked`); muted, it plays on the wall clock -->
+<video-hfp id="v" src="clips/A.mp4" style="width:320px"></video-hfp>
+<script type="module">
+const v = document.getElementById('v');
+const q = new URLSearchParams(location.search); if (q.get('src')) v.setAttribute('src', `clips/${q.get('src')}`);
+let blocked = 0; v.addEventListener('blocked', () => blocked++);
+await import('../src/element.js');
+// Headless Chromium starts an AudioContext running whatever the autoplay flag says, so the policy is SIMULATED here:
+// the context is suspended and will not resume — which is exactly what a page sees before its first gesture.
+await v.engine.audioContext.suspend();
+v.engine.audioContext.resume = () => Promise.resolve();
+const out = { done: true };
+out.rejected = await v.play().then(() => null, (e) => e.name);
+out.blocked = blocked;
+out.paused = v.paused;
+v.muted = true;
+out.mutedPlay = await v.play().then(() => 'played', (e) => e.name);
+await new Promise((r) => setTimeout(r, 1200));
+out.framesWhileMuted = v.engine.stats.rendered;
+out.clock = v.engine.stats.clock;
+window.__probe = out;
+</script>

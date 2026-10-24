@@ -1,0 +1,33 @@
+<!doctype html><meta charset="utf-8"><title>video-hfp — the &lt;video&gt; surface</title>
+<style>body{background:#111;color:#ddd;font:14px system-ui}video-hfp{width:640px}pre{font:12px ui-monospace,monospace;white-space:pre-wrap}</style>
+<!-- the same attributes a <video> would get: no script drives playback -->
+<video-hfp id="v" src="clips/A.mp4" autoplay loop loop-start="30" loop-end="90" muted></video-hfp>
+<pre id="out">…</pre>
+<script type="module">
+// listeners first, then the definition: the upgrade fires loadstart at once
+const v = document.getElementById('v');
+const events = window.__events = [], trace = window.__trace = [];
+for (const t of ['loadstart', 'durationchange', 'loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough', 'play', 'playing', 'waiting', 'pause', 'ended', 'seeking', 'seeked', 'volumechange', 'emptied', 'error', 'blocked', 'loop', 'switch'])
+  v.addEventListener(t, () => events.push(t));
+let timeupdates = 0; v.addEventListener('timeupdate', () => timeupdates++);
+v.addEventListener('frame', (e) => trace.push([e.clip.name, e.index, e.p]));
+const q = new URLSearchParams(location.search);
+if (q.get('src')) v.setAttribute('src', `clips/${q.get('src')}`);
+await import('../src/element.js');
+const throws = {};
+for (const name of ['playbackRate', 'srcObject', 'mediaKeys', 'defaultPlaybackRate']) { try { v[name] = 2; throws[name] = null; } catch (e) { throws[name] = e.name; } }
+try { v.addTextTrack('subtitles'); throws.addTextTrack = null; } catch (e) { throws.addTextTrack = e.name; }
+throws.requestPictureInPicture = await v.requestPictureInPicture().then(() => null, (e) => e.name);
+await new Promise((r) => setTimeout(r, 4000));
+const probe = { done: true, events: events.slice(), timeupdates, trace: trace.slice(), throws, paused: v.paused, duration: v.duration, currentTime: v.currentTime, currentFrame: v.currentFrame, frameRate: v.frameRate, frameCount: v.frameCount, readyState: v.readyState, videoWidth: v.videoWidth, videoHeight: v.videoHeight, muted: v.muted, loop: v.loop, size: [v.getBoundingClientRect().width, v.getBoundingClientRect().height] };
+// pause, seek while paused, resume: the events a <video> would fire
+v.pause(); events.length = 0;
+v.seek(10);
+await new Promise((r) => setTimeout(r, 800));
+probe.afterSeekPaused = { events: events.slice(), currentFrame: v.currentFrame, paused: v.paused };
+events.length = 0; const mark = trace.length; await v.play(); await new Promise((r) => setTimeout(r, 600));
+probe.afterResume = { events: events.slice(), paused: v.paused, firstFrames: trace.slice(mark, mark + 4).map((e) => e[1]) };
+v.pause();
+window.__probe = probe;
+document.getElementById('out').textContent = JSON.stringify(probe, null, 1);
+</script>

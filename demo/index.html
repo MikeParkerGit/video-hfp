@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>video-hfp — demo</title>
+<style>
+  :root { color-scheme: dark; font: 14px/1.4 system-ui, sans-serif; }
+  body { margin: 0; padding: 12px; background: #111; color: #ddd; max-width: 1100px; margin-inline: auto; }
+  video-hfp { width: 100%; height: auto; aspect-ratio: 16 / 9; border-radius: 6px; object-fit: contain; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
+  button, select { font: inherit; padding: 8px 12px; border-radius: 6px; border: 1px solid #444; background: #222; color: #eee; min-height: 44px; }
+  button:disabled { opacity: .4; }
+  input[type=number] { width: 5.5em; min-height: 44px; box-sizing: border-box; font: inherit; padding: 6px; border-radius: 6px; border: 1px solid #444; background: #1a1a1a; color: #eee; }
+  label { display: inline-flex; gap: 4px; align-items: center; }
+  #status, #stats, #advice { font-family: ui-monospace, monospace; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; color: #9ad; }
+  #advice { color: #fc9; }
+  #trace { font-family: ui-monospace, monospace; font-size: 12px; color: #ad9; min-height: 1.5em; overflow-wrap: anywhere; }
+  fieldset { border: 1px solid #333; border-radius: 6px; padding: 8px 10px; }
+  legend { color: #888; padding: 0 4px; }
+</style>
+</head>
+<body>
+<video-hfp id="v"></video-hfp>
+<div id="trace">—</div>
+
+<fieldset><legend>Clips</legend>
+  <div class="row">
+    <label>A <select id="selA"></select></label>
+    <label>B <select id="selB"></select></label>
+    <button id="reload">Load</button>
+    <span style="color:#888">A.mp4/B.mp4 are packed at GOP 12; A-normal.mp4 is an ordinary file (GOP 250, B-frames)</span>
+  </div>
+</fieldset>
+
+<fieldset><legend>1. Loop</legend>
+  <div class="row">
+    <label>from <input id="lf" type="number" value="30"></label>
+    <label>to <input id="lt" type="number" value="90"></label>
+    <button id="loopA">Loop A [from, to)</button>
+    <button id="playA">Play A from 0</button>
+    <span style="color:#888">expect: A 89 → A 30 with no hitch</span>
+  </div>
+</fieldset>
+
+<fieldset><legend>2. Frame-exact cut at a boundary</legend>
+  <div class="row">
+    <label>after A# <input id="cat" type="number" value="75"></label>
+    <label>B from <input id="cfrom" type="number" value="438"></label>
+    <button id="cut">Cutover → B</button>
+    <span style="color:#888">expect: A 75 → B 438, audio switches on the same boundary</span>
+  </div>
+</fieldset>
+
+<fieldset><legend>3. Prepared cut</legend>
+  <div class="row">
+    <label>B from <input id="sfrom" type="number" value="200"></label>
+    <button id="prep">Prepare B</button>
+    <button id="sw">Cut now → B</button>
+    <button id="stop">Stop</button>
+    <span style="color:#888">prepare builds a bridge (raw frames, no decoder); the cut then lands on the next display frame and the decoder takes over behind it</span>
+  </div>
+</fieldset>
+
+<fieldset><legend>4. Budget (tools; the player never runs these on its own)</legend>
+  <div class="row">
+    <button id="measure">Measure this device</button>
+    <span style="color:#888">the probe: decode rate, start-up, re-target, decoder count → a Hardware Profile, kept on this device</span>
+    <button id="bridgeProbe">Measure bridge compression</button>
+    <span style="color:#888">per frame of A: raw vs JPEG vs intra video (a record; the bridge is stored raw)</span>
+  </div>
+  <div class="row">
+    <button id="optimize">Optimize</button>
+    <span style="color:#888">the player's own door: size bridges from this device — the profile stored for this origin, or a measurement now; every page here starts from the stored one</span>
+  </div>
+  <div class="row">
+    <label>switch to B# <input id="bidx" type="number" value="438"></label>
+    <label>within frames <input id="bwithin" type="number" value="3"></label>
+    <button id="ask">Can I?</button>
+    <span style="color:#888">the budget model's answer for this device's profile and this file</span>
+  </div>
+  <div class="row">
+    <label>prepared at once <input id="pprep" type="number" value="6"></label>
+    <label>cold switch within frames <input id="pswitch" type="number" value="1"></label>
+    <label>loop frames <input id="ploop" type="number" value="60"></label>
+    <button id="planBtn">Plan against known profiles</button>
+    <span style="color:#888">A's resolution and B's GOP, checked against every profile we know plus this device's</span>
+  </div>
+  <div id="advice"></div>
+</fieldset>
+
+<div id="status">loading…</div>
+<div id="stats"></div>
+
+<script type="module">
+import { probeSupport, storedProfile, probeDevice, canDo, plan, KNOWN_PROFILES, DEFAULT_PROFILE, probeBridgeCompression, bridgeFrames } from '../src/index.js';
+
+const $ = (id) => document.getElementById(id);
+const status = (s) => { $('status').textContent = s; };
+const buttons = ['loopA', 'playA', 'cut', 'prep', 'sw', 'stop', 'ask', 'measure', 'bridgeProbe', 'optimize', 'planBtn'].map($);
+buttons.forEach((b) => (b.disabled = true));
+const q = new URLSearchParams(location.search);
+
+const support = await probeSupport();
+status(`support: ${JSON.stringify(support)}`);
+if (!support.videoDecoder) throw new Error('no VideoDecoder here');
+
+const v = $('v');
+if (q.get('worker') === '1') v.setAttribute('worker', '');
+await import('../src/element.js');      // defines <video-hfp>; the engine is created on upgrade
+const player = v.engine;
+window.__v = v;
+window.__mtvPlayer = window.__player = player;
+window.__trace = [];
+
+const variant = support.h264 ? 'mp4' : 'vp9';
+const choices = variant === 'mp4' ? ['A.mp4', 'B.mp4', 'A-normal.mp4', 'A-vp9.webm', 'B-vp9.webm'] : ['A-vp9.webm', 'B-vp9.webm', 'A.mp4', 'B.mp4', 'A-normal.mp4'];
+for (const sel of [$('selA'), $('selB')]) for (const c of choices) { const o = document.createElement('option'); o.value = o.textContent = c; sel.append(o); }
+$('selA').value = q.get('a') || choices[0];
+$('selB').value = q.get('b') || choices[1];
+
+let A, B, device = storedProfile();
+async function load() {
+  buttons.forEach((b) => (b.disabled = true));
+  v.pause();
+  const stream = q.get('stream') === '1' ? true : q.get('stream') === '0' ? false : 'auto';
+  const stages = { A: '…', B: '…' };
+  const show = (extra) => status(`support: ${JSON.stringify(support)}\nloading… A: ${stages.A} | B: ${stages.B}${extra ? '\n' + extra : ''}`);
+  const prog = (k) => (s) => { stages[k] = s; show(); };
+  // open with names first; the src attribute then finds the same clip in the element's cache
+  const pa = v.open(`clips/${$('selA').value}`, { name: 'A', stream, onProgress: prog('A') });
+  const pb = v.open(`clips/${$('selB').value}`, { name: 'B', stream, onProgress: prog('B') });
+  v.src = `clips/${$('selA').value}`;
+  [A, B] = await Promise.all([pa, pb]);
+  status(`support: ${JSON.stringify(support)}
+A (${A.url.split('/').pop()}): ${A.codec} ${A.width}x${A.height} ${A.frameCount}f @${A.fps.toFixed(3)} gop ${A.gop} reorder ${A.reorderDepth} audio ${A.audio ? A.audio.codec : 'no'} source ${A.source.url && 'windowBytes' in A.source ? 'byte ranges' : 'whole file'}  supported: ${await A.isSupported()}
+B (${B.url.split('/').pop()}): ${B.codec} ${B.frameCount}f gop ${B.gop}  bridge at ${$('sfrom').value}: ${player.bridgeFramesFor(B, Number($('sfrom').value))} frames on ${player.floor.measuredAt ? 'this device (optimized)' : 'the baseline floor'}  supported: ${await B.isSupported()}
+profile: ${device ? `${device.label} — decode ${device.decodeFps} fps, start-up ${device.decoderStartupMs} ms${device.decoderRestartMs != null ? `, re-target ${device.decoderRestartMs} ms` : ''}, decoders ${device.decoders}${device.decodersAtLeast ? '+' : ''}, encode ${device.encodeFps ?? '–'} fps, refresh ${device.refreshHz} Hz${device.notes?.length ? ' — ' + device.notes.join('; ') : ''}` : 'not measured (the player does not probe on its own; press "Measure this device")'}
+audioContext: ${player.audioContext.sampleRate} Hz, baseLatency ${(player.audioContext.baseLatency * 1000).toFixed(1)} ms, outputLatency ${(player.outputLatency * 1000).toFixed(1)} ms`);
+  buttons.forEach((b) => (b.disabled = false));
+  window.__clips = { A, B };
+}
+
+// trace of the last frames drawn, so boundaries can be read off the screen as well as the picture
+const recent = [];
+let lastKey = '';
+const pushRecent = (s) => { recent.push(s); if (recent.length > 14) recent.shift(); $('trace').textContent = recent.join('  ›  '); };
+v.addEventListener('frame', (e) => {
+  window.__trace.push([e.clip.name, e.index, e.p, player.now]);
+  const key = `${e.clip.name}${e.index}`;
+  if (key === lastKey) return;
+  lastKey = key;
+  pushRecent(`${e.clip.name} ${e.index}`);
+});
+v.addEventListener('switch', (e) => pushRecent(`[→ ${e.toClip.name} ${e.toFrame}]`));
+v.addEventListener('error', (e) => status(`${$('status').textContent}\nerror: ${e.error?.message ?? e.error}`));
+v.addEventListener('decoderrefused', (e) => status(`${$('status').textContent}\ndecoder refused (recovered): ${e.error?.message ?? e.error}`));
+v.addEventListener('blocked', (e) => pushRecent(`(audio for ${e.clip?.name ?? 'the clip'} waits for a tap)`));
+
+const n = (id) => Number($(id).value);
+const report = (p) => p?.catch?.((e) => pushRecent(`(${e.name}: ${e.message})`));
+$('reload').onclick = () => load().catch((err) => status(`load failed: ${err.message}`));
+$('loopA').onclick = () => report(v.play({ clip: A, from: n('lf'), to: n('lt'), loop: true }));
+$('playA').onclick = () => report(v.play({ clip: A, from: 0, to: A.frameCount }));
+$('cut').onclick = () => {
+  const t = v.cutAfter(n('cat'), B, n('cfrom'));
+  pushRecent(`(cut scheduled in ${((t - player.now) * 1000).toFixed(0)} ms)`);
+};
+$('prep').onclick = async () => { try { const h = await v.prepare(B, n('sfrom')); pushRecent(`(B ${h.frame} prepared: ${h.bridgeFrames} frames, ${(h.bytes / 1048576).toFixed(1)} MB)`); } catch (e) { pushRecent(`(prepare failed: ${e.message})`); } };
+$('sw').onclick = () => v.cut(B, n('sfrom'));
+$('stop').onclick = () => v.pause();
+$('measure').onclick = async () => {
+  if (player.playing) { $('advice').textContent = 'stop playback first: the probe must not share the decoder with a playing clip'; return; }
+  $('measure').disabled = true;
+  try {
+    device = await probeDevice(A, { onProgress: (s) => { $('advice').textContent = `measuring: ${s}…`; } });
+    device.outputLatencyMs = Math.round(player.outputLatency * 1000);
+    $('advice').textContent = 'this device:\n' + JSON.stringify(device, null, 1);
+    await load();
+  } catch (e) { $('advice').textContent = `probe failed: ${e.message}`; }
+  $('measure').disabled = false;
+};
+$('bridgeProbe').onclick = async () => {
+  if (player.playing) { $('advice').textContent = 'stop playback first'; return; }
+  $('bridgeProbe').disabled = true;
+  try { const r = await probeBridgeCompression(A, { frames: 16, from: Math.min(60, Math.max(0, A.frameCount - 20)), onProgress: (s) => { $('advice').textContent = `bridge compression: ${s}…`; } }); window.__bridgeProbe = r; $('advice').textContent = JSON.stringify(r, null, 1); }
+  catch (e) { $('advice').textContent = `bridge probe failed: ${e.message}`; }
+  $('bridgeProbe').disabled = false;
+};
+$('optimize').onclick = async () => {
+  if (player.playing) { $('advice').textContent = 'stop playback first: the probe must not share the decoder with a playing clip'; return; }
+  $('optimize').disabled = true;
+  try { const p = await v.optimize({ onProgress: (s) => { $('advice').textContent = `optimizing: ${s}…`; } }); device = p; $('advice').textContent = `optimized (${player.stats.floor}): bridges are sized from this device — decode ${p.decodeFps} fps, re-target ${p.decoderRestartMs} ms, start-up ${p.decoderStartupMs} ms\nB at ${$('sfrom').value}: ${player.bridgeFramesFor(B, Number($('sfrom').value))} frames (baseline floor: ${bridgeFrames(B, Number($('sfrom').value))})\n` + JSON.stringify(v.floor, null, 1); await load(); }
+  catch (e) { $('advice').textContent = `optimize failed: ${e.message}`; }
+  $('optimize').disabled = false;
+};
+v.addEventListener('memory', (e) => pushRecent(`(memory ${e.level.toUpperCase()}: ${(e.bytes / 1048576).toFixed(0)} MB of frames)`));
+v.addEventListener('handoff', (e) => pushRecent(`(hand-off: bridge ${e.bridge}, ${e.late ? `late ${e.late}` : `used ${e.used}`}${e.next ? ` → ${e.next}` : ''})`));
+$('ask').onclick = () => {
+  const r = canDo({ kind: 'switch', clip: B, index: n('bidx'), withinFrames: n('bwithin'), prepared: false }, { profile: device ?? DEFAULT_PROFILE, player });
+  $('advice').textContent = (device ? '' : 'no profile measured here; assuming a conservative phone\n') + JSON.stringify(r, null, 1);
+  window.__advice = r;
+};
+$('planBtn').onclick = () => {
+  const spec = { width: A.width, height: A.height, fps: A.fps, gop: B.gop, reorderDepth: B.reorderDepth, prepared: n('pprep'), switchWithinFrames: n('pswitch'), loop: { lengthFrames: n('ploop'), leadInFrames: Math.min(B.gop - 1, 30) }, lookahead: player.lookahead };
+  const r = plan(spec, device ? [...KNOWN_PROFILES, device] : KNOWN_PROFILES);
+  $('advice').textContent = `plan ${JSON.stringify(spec)}\n${r.ok ? 'fits every profile' : 'limits:'}\n` + r.profiles.map((p) => `${p.ok ? '✓' : '✗'} ${p.label}${p.limits.length ? '\n    ' + p.limits.join('\n    ') : ''}${p.remedies.length ? '\n    → ' + p.remedies.map((m) => m.note).join('\n    → ') : ''}`).join('\n');
+  window.__plan = r;
+};
+
+setInterval(() => {
+  const seg = player._segment;
+  const s = seg ? seg.source.stats : null;
+  $('stats').textContent = `frame ${v.currentFrame}  t ${v.currentTime.toFixed(2)}s  ${v.paused ? 'paused' : 'playing'}  readyState ${v.readyState}  p ${player.stats.p}  rendered ${player.stats.rendered}  dropped ${player.stats.dropped}  stalls ${player.stats.stalls}  decoders ${player.stats.decoders}  bridges ${player.stats.bridges}  memory ${(player.stats.memoryBytes / 1048576).toFixed(0)} MB ${player.stats.memoryLevel}  floor ${player.stats.floor} ×${player.stats.bridgeScale.toFixed(2)} (${player.stats.tuned} learned)  clock ${player.stats.clock}  worker ${player.worker ? 'yes' : 'no'}  recoveries ${player.stats.recoveries}` +
+    (s ? `   | source: ${s.bridge ? 'bridge' : 'decoder'} queued ${s.queued}  inflight ${s.inflight}  hwqueue ${s.decodeQueue}  fetchWaits ${s.fetchWaits}` : '') +
+    `   | audio: windows ${player.audio.stats.windowsDecoded}  late ${player.audio.stats.late}  mode ${player.audio.stats.mode}` +
+    (A && A.source.stats ? `   | ranges: ${A.source.stats.requests} req, ${(A.source.stats.bytes / 1048576).toFixed(1)} MB, ${(A.source.residentBytes / 1048576).toFixed(1)} MB resident` : '') +
+    `   | t ${player.now.toFixed(2)}s` + (player.playing && player.stats.rendered === 0 && player.stats.stalls > 30 ? '   ⚠ the decoder has produced no frame' : '');
+}, 200);
+
+await load().catch((err) => status(`load failed: ${err.message}`));
+</script>
+</body>
+</html>

@@ -1,0 +1,53 @@
+<!doctype html><meta charset="utf-8"><title>prepare probe</title><pre id="out">running…</pre><canvas id="c" width="1280" height="720" style="width:320px"></canvas>
+<script type="module">
+// How many targets can be PREPARED at once with software decoders, and does a switch into one of
+// them land on the next frame? Each prepared target is a FrameSource parked a few frames deep.
+import { Player } from '../src/player.js';
+import { loadClip } from '../src/clip.js';
+import { FrameSource } from '../src/frame-source.js';
+const q = new URLSearchParams(location.search);
+const N = Number(q.get('n') || 40), file = q.get('file') || 'A.mp4', lookahead = Number(q.get('lookahead') || 3);
+const out = (o) => { window.__probe = o; document.getElementById('out').textContent = JSON.stringify(o, null, 1); };
+// a VideoDecoder that asks for software decode
+class SoftDecoder extends VideoDecoder { configure(cfg) { return super.configure({ ...cfg, hardwareAcceleration: 'prefer-software' }); } }
+try {
+  const clip = await loadClip(`clips/${file}`, { name: 'T' });
+  const t0 = performance.now();
+  const sources = [];
+  let failed = 0; const errors = [];
+  for (let i = 0; i < N; i++) {
+    const target = (i * 13 + 5) % (clip.frameCount - 60);          // a different frame for each target, inside a GOP
+    try {
+      const s = new FrameSource(clip, { lookahead, VideoDecoder: SoftDecoder });
+      s.onerror = (e) => { failed++; errors.push(`${i}: ${e.message}`); };
+      s.start({ from: target, to: clip.frameCount, loop: false });
+      sources.push({ i, target, s });
+    } catch (e) { failed++; errors.push(`${i}: ${e.message}`); }
+  }
+  // wait until every source has its first frame (or 20 s)
+  const tw = performance.now();
+  while (performance.now() - tw < 20000 && sources.some(({ s }) => s.queued === 0 && !s.error)) await new Promise((r) => setTimeout(r, 20));
+  const ready = sources.filter(({ s }) => s.queued > 0).length;
+  const prepMs = Math.round(performance.now() - t0);
+  const queuedTotal = sources.reduce((a, { s }) => a + s.queued, 0);
+  // now the switch: a Player plays one target, then switches to another prepared one; count frames between
+  const player = new Player(document.getElementById('c'));
+  const frames = []; player.addEventListener('frame', (e) => frames.push([e.clip.name, e.index, performance.now()]));
+  // adopt two of the prepared sources as the player's prepared list (the API takes a clip; here we hand it the sources directly)
+  const a = sources[3], b = sources[27];
+  player._prepared.push({ clip, source: a.s }); player.stats.decoders++;
+  player.play(clip, { from: a.target, to: clip.frameCount });
+  await new Promise((r) => setTimeout(r, 1500));
+  player._prepared.push({ clip, source: b.s }); player.stats.decoders++;
+  const mark = frames.length, tClick = performance.now();
+  player.switchNow(clip, { from: b.target, to: clip.frameCount });
+  await new Promise((r) => setTimeout(r, 1000));
+  const after = frames.slice(mark);
+  const firstNew = after.findIndex(([, idx]) => idx >= b.target && idx < b.target + 4);
+  const switchMs = firstNew >= 0 ? Math.round(after[firstNew][2] - tClick) : null;
+  const mem = performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null;
+  out({ done: true, file, codec: clip.codec, size: `${clip.width}x${clip.height}`, gop: clip.gop, targets: N, lookahead, ready, failed, errors: errors.slice(0, 3), prepMs, framesParked: queuedTotal,
+    switch: { framesBeforeNewClip: firstNew, msToFirstPicture: switchMs, landed: firstNew >= 0 ? after[firstNew][1] : null, target: b.target }, jsHeapMB: mem, stats: player.stats });
+  player.stop(); for (const { s } of sources) s.close();
+} catch (e) { out({ done: true, error: String(e?.message || e), stack: String(e?.stack || '').slice(0, 300) }); }
+</script>

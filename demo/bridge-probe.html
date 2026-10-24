@@ -1,0 +1,11 @@
+<!doctype html><meta charset="utf-8"><title>bridge compression probe</title><pre id="out">running…</pre>
+<script type="module">
+import { loadClip } from '../src/clip.js';
+import { probeBridgeCompression } from '../src/bridge-probe.js';
+const q = new URLSearchParams(location.search);
+const out = (o) => { window.__probe = o; document.getElementById('out').textContent = JSON.stringify(o, null, 1); };
+try {
+  const clip = await loadClip(`clips/${q.get('file') || 'A.mp4'}`, { name: 'T' });
+  out({ done: true, ...(await probeBridgeCompression(clip, { frames: Number(q.get('n') || 16), from: Number(q.get('from') || 60), quality: Number(q.get('q') || 0.9), webp: q.get('webp') === '1', ...(q.get('bpp') ? { bitsPerPixel: q.get('bpp').split(',').map(Number) } : {}) })) });
+} catch (e) { out({ done: true, error: String(e?.message || e) }); }
+</script>

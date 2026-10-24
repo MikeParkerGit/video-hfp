@@ -1,0 +1,49 @@
+<!doctype html><meta charset="utf-8"><title>transcode probe</title><pre id="out">running…</pre>
+<script type="module">
+// Decode every frame of A.mtv with VideoDecoder, then re-encode the frames with VideoEncoder
+// (keyframe every 12, no B-frames by construction) and time both. window.__probe holds the result.
+import { parseMtv } from '../src/mtv.js';
+import { Clip } from '../src/clip.js';
+const out = (o) => { window.__probe = o; document.getElementById('out').textContent = JSON.stringify(o, null, 2); };
+try {
+  const clip = new Clip(parseMtv(await (await fetch('clips/A.mtv')).arrayBuffer()), null, 'A');
+  const cfg = clip.decoderConfig();
+  const hwDec = await VideoDecoder.isConfigSupported({ ...cfg, hardwareAcceleration: 'prefer-hardware' });
+  const swDec = await VideoDecoder.isConfigSupported({ ...cfg, hardwareAcceleration: 'prefer-software' });
+  // ---- decode all frames
+  const frames = [];
+  let decErr = null;
+  const dec = new VideoDecoder({ output: (f) => frames.push(f), error: (e) => { decErr = e; } });
+  dec.configure(cfg);
+  const t0 = performance.now();
+  for (let i = 0; i < clip.frameCount; i++) {
+    dec.decode(new EncodedVideoChunk({ type: clip.isKeyframe(i) ? 'key' : 'delta', timestamp: Math.round(i * clip.frameDuration * 1e6), duration: Math.round(clip.frameDuration * 1e6), data: clip.sample(i) }));
+    while (dec.decodeQueueSize > 8) await new Promise((r) => setTimeout(r, 1));
+  }
+  await dec.flush();
+  const tDec = performance.now() - t0;
+  dec.close();
+  if (decErr) throw decErr;
+  // ---- re-encode, keyframe every 12
+  const encCfg = { codec: 'avc1.4d401f', width: clip.width, height: clip.height, bitrate: 6_000_000, framerate: clip.fps, latencyMode: 'quality', avc: { format: 'avc' } };
+  const hwEnc = await VideoEncoder.isConfigSupported({ ...encCfg, hardwareAcceleration: 'prefer-hardware' });
+  const swEnc = await VideoEncoder.isConfigSupported({ ...encCfg, hardwareAcceleration: 'prefer-software' });
+  let bytes = 0, chunks = 0, keys = 0, encErr = null;
+  const enc = new VideoEncoder({ output: (c) => { bytes += c.byteLength; chunks++; if (c.type === 'key') keys++; }, error: (e) => { encErr = e; } });
+  enc.configure(encCfg);
+  const t1 = performance.now();
+  for (let i = 0; i < frames.length; i++) {
+    enc.encode(frames[i], { keyFrame: i % 12 === 0 });
+    frames[i].close();
+    while (enc.encodeQueueSize > 8) await new Promise((r) => setTimeout(r, 1));
+  }
+  await enc.flush();
+  const tEnc = performance.now() - t1;
+  enc.close();
+  if (encErr) throw encErr;
+  out({ done: true, frames: clip.frameCount, size: `${clip.width}x${clip.height}`,
+    decode: { ms: Math.round(tDec), fps: Math.round(clip.frameCount / tDec * 1000), hwSupported: hwDec.supported, swSupported: swDec.supported },
+    encode: { ms: Math.round(tEnc), fps: Math.round(frames.length / tEnc * 1000), chunks, keys, kbps: Math.round(bytes * 8 / (frames.length / clip.fps) / 1000), hwSupported: hwEnc.supported, swSupported: swEnc.supported },
+    userAgent: navigator.userAgent });
+} catch (e) { out({ done: true, error: String(e && e.message || e) }); }
+</script>
