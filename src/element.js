@@ -56,7 +56,7 @@ canvas{display:block;width:100%;height:100%;object-fit:inherit}
 </div>`;
 const HIDE_AFTER_MS = 2500;
 const fmtTime = (t) => { if (!Number.isFinite(t) || t < 0) t = 0; const s = Math.floor(t), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60; const p = (n) => String(n).padStart(2, '0'); return h ? `${h}:${p(m)}:${p(sec)}` : `${m}:${p(sec)}`; };
-const UNSUPPORTED = { playbackRate: 1, defaultPlaybackRate: 1, preservesPitch: true, srcObject: null, mediaKeys: null, disablePictureInPicture: false, disableRemotePlayback: false };
+const UNSUPPORTED = { srcObject: null, mediaKeys: null, disablePictureInPicture: false, disableRemotePlayback: false };
 const notSupported = (what) => new DOMException(`${what} is not supported by <video-hfp>`, 'NotSupportedError');
 const TIMEUPDATE_MS = 250;
 const clampInt = (v, lo, hi) => Math.max(lo, Math.min(hi, Math.trunc(Number(v))));
@@ -93,7 +93,7 @@ export class VideoHFP extends HTMLElementBase {
     this._readyState = 0; this._networkState = 0;
     this._paused = true; this._ended = false; this._seeking = false; this._waiting = false; this._playingPending = false; this._playPending = false;
     this._pos = null;               // where a paused playback resumes: { clip, from, to, loop, index }
-    this._volume = 1; this._muted = null;
+    this._volume = 1; this._muted = null; this._defaultRate = 1;
     this._error = null;
     this._rvfc = new Map(); this._rvfcId = 0;
     this._timeupdate = 0; this._lastTimeupdate = 0;
@@ -117,6 +117,7 @@ export class VideoHFP extends HTMLElementBase {
     engine.addEventListener('ended', (e) => this._onEnded(e));
     engine.addEventListener('blocked', (e) => this._fire('blocked', { clip: e.clip }));
     engine.addEventListener('memory', (e) => this._fire('memory', { bytes: e.bytes, level: e.level, previous: e.previous }));
+    engine.addEventListener('ratechange', () => this._fire('ratechange'));
     engine.addEventListener('optimized', (e) => this._fire('optimized', { profile: e.profile, floor: e.floor, source: e.source }));
     engine.addEventListener('handoff', (e) => this._fire('handoff', { clip: e.clip, bridge: e.bridge, used: e.used, late: e.late, next: e.next }));
     engine.addEventListener('tuned', (e) => this._fire('tuned', { clip: e.clip, bridge: e.bridge, used: e.used, late: e.late, next: e.next, scale: e.scale }));
@@ -184,6 +185,13 @@ export class VideoHFP extends HTMLElementBase {
   set defaultMuted(v) { this.toggleAttribute('muted', !!v); }
   get volume() { return this._volume; }
   set volume(v) { v = Number(v); if (!(v >= 0 && v <= 1)) throw new DOMException('volume must be between 0 and 1', 'IndexSizeError'); this._volume = v; this._applyVolume(); this._fire('volumechange'); }
+  /** 0.25–4; a change keeps the frame on screen where it is. Pitch is preserved unless `preservesPitch` is false (or the context cannot: then it reads false). */
+  get playbackRate() { return this.engine.rate; }
+  set playbackRate(r) { this.engine.rate = r; }
+  get defaultPlaybackRate() { return this._defaultRate; }
+  set defaultPlaybackRate(r) { r = Number(r); if (!(r >= 0.25 && r <= 4)) throw new RangeError(`defaultPlaybackRate ${r}: 0.25 to 4`); this._defaultRate = r; }
+  get preservesPitch() { return this.engine.preservesPitch; }
+  set preservesPitch(v) { this.engine.preservesPitch = !!v; }
   get paused() { return this._paused; }
   get ended() { return this._ended; }
   get seeking() { return this._seeking; }
@@ -453,6 +461,7 @@ export class VideoHFP extends HTMLElementBase {
     if (!src) { this._mainPromise = null; this._networkState = 0; this._fire('emptied'); return; }
     if (!force && this.preload === 'none' && !this.autoplay) { this._mainPromise = null; this._networkState = 1; return; }
     this._networkState = 2; this._fire('loadstart');
+    if (this._engine && this._engine.rate !== this._defaultRate) this._engine.rate = this._defaultRate;
     const p = this._mainPromise = this.open(src).then((clip) => {
       if (this._mainPromise !== p) return clip;
       this._main = clip; this._readyState = 1; this._networkState = 1;

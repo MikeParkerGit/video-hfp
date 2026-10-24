@@ -46,7 +46,9 @@ const frameBytes = (clip) => Math.round(clip.width * clip.height * 1.5);
  * @param {{ profile?: object, device?: object, player?: { lookahead?: number } }} ctx   profile: a HardwareProfile (device: the same, older name)
  */
 export function canDo(action, { device = DEFAULT_PROFILE, profile, player } = {}) {
-  const dev = { ...DEFAULT_PROFILE, ...(profile || device) };
+  const dev0 = { ...DEFAULT_PROFILE, ...(profile || device) };
+  const rate = action.rate ?? player?.rate ?? 1;
+  const dev = rate === 1 ? dev0 : { ...dev0, decodeFps: dev0.decodeFps / rate };   // at a rate the clip asks `rate` times the decodes per second: the same question against a slower device
   const lookahead = player?.lookahead ?? 6;
   const frameMs = (clip) => clip.frameDuration * 1000;
   const out = { ok: true, kind: action.kind, costMs: 0, budgetMs: null, notes: [], remedies: [] };

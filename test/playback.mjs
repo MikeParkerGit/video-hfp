@@ -80,7 +80,7 @@ async function runPair(a, b, label, { worker = false } = {}) {
     if (!/B \(.*supported: true/.test(status)) throw new Error('clips did not load: ' + status);
     run.floorAtLoad = await evaluate('window.__player.stats.floor');   // 'baseline' on the first page of this browser profile; 'stored' on every page after a measurement
     // an audio tap: record the master bus and find where the beep frequency changes
-    await evaluate(`(async () => { const p = window.__player; const ctx = p.audioContext; const an = ctx.createAnalyser(); an.fftSize = 2048; p.masterGain.connect(an); window.__an = an; window.__pitch = [];
+    await evaluate(`(async () => { const p = window.__player; const ctx = p.audioContext; const an = ctx.createAnalyser(); an.fftSize = 2048; p.audio.output.connect(an); window.__an = an; window.__pitch = [];
       const buf = new Float32Array(an.fftSize); const tick = () => { an.getFloatTimeDomainData(buf); let zc = 0; for (let i = 1; i < buf.length; i++) if ((buf[i-1] < 0) !== (buf[i] < 0)) zc++; const rms = Math.sqrt(buf.reduce((s, x) => s + x * x, 0) / buf.length); window.__pitch.push([p.now, zc * ctx.sampleRate / buf.length / 2, rms]); requestAnimationFrame(tick); }; tick(); })()`);
     // 1. Loop A [30, 90): contiguous, wraps 89 → 30 (with a worker: under a busy main thread, 40 ms blocks every 150 ms)
     if (worker) await evaluate(`window.__busy = setInterval(() => { const t = performance.now(); while (performance.now() - t < 40); }, 150); true`);
@@ -102,6 +102,27 @@ async function runPair(a, b, label, { worker = false } = {}) {
     const stAfterLoop = await stats();
     if (worker) { if (loop.length < 30 || bad.length || stAfterLoop.stalls > 1) fail('loop', { frames: loop.length, wraps, outOfOrder: bad.slice(0, 5), skips, stalls: stAfterLoop.stalls, note: 'busy main thread: 40 ms blocks every 150 ms' }); else pass('loop', { frames: loop.length, wraps, skips, stalls: stAfterLoop.stalls, note: 'busy main thread: 40 ms blocks every 150 ms; skips are missed animation frames, not decoder stalls' }); }
     else if (loop.length < 30 || wraps < 1 || bad.length || skips > 2) fail('loop', { frames: loop.length, wraps, outOfOrder: bad.slice(0, 5), skips }); else pass('loop', { frames: loop.length, wraps, skips });
+    // 1b. the loop at 2×: twice the media frames a second, the wrap still exact, and the 440 Hz beep still ~440 with the pitch kept, ~880 without
+    if (!worker && a.startsWith('A.') ) {
+      const pitchOf = async (seconds) => { const m0 = (await evaluate('window.__pitch.length')); await sleep(seconds * 1000); const px = await evaluate(`JSON.stringify(window.__pitch.slice(${m0}))`).then(JSON.parse); const fs = px.filter(([, f, rms]) => rms > 0.01).map(([, f]) => f).sort((x, y) => x - y); return fs.length ? fs[fs.length >> 1] : null; };
+      const m1 = (await trace()).length; const dropped0 = (await stats()).dropped;
+      await evaluate('window.__v.playbackRate = 2; true');
+      const kept = await pitchOf(2.5);
+      const tr2 = (await trace()).slice(m1).filter((e) => e[0] === 'A');
+      let wraps2 = 0; const bad2x = [];
+      for (let i = 1; i < tr2.length; i++) { const prev = tr2[i - 1][1], cur = tr2[i][1]; if (prev >= 86 && cur <= 33) wraps2++; else if (cur < prev) bad2x.push([prev, cur]); }
+      const span = tr2.length ? tr2[tr2.length - 1][3] - tr2[0][3] : 0;
+      const mediaPerSec = tr2.length > 1 ? (tr2.length - 1) / span : 0;   // distinct media frames drawn per second of player time
+      await evaluate('window.__v.preservesPitch = false; true');
+      const shifted = await pitchOf(2.0);
+      await evaluate('window.__v.preservesPitch = true; window.__v.playbackRate = 1; true');
+      await sleep(300);
+      const rateDetail = { mediaFramesPerSecond: Math.round(mediaPerSec), wraps: wraps2, outOfOrder: bad2x.slice(0, 3), pitchKeptHz: kept && Math.round(kept), pitchShiftedHz: shifted && Math.round(shifted), rateAfter: await evaluate('window.__v.playbackRate'), preservesPitch: await evaluate('window.__v.preservesPitch'), droppedDuring: (await stats()).dropped - dropped0 };
+      run.rateDrops = rateDetail.droppedDuring;
+      // at 2× a 30 fps clip wants 60 media frames a second, one per display frame on a 60 Hz display: a late display frame drops a media frame (the display's doing, not the decoder's)
+      const okRate = mediaPerSec > 44 && mediaPerSec < 66 && wraps2 >= 1 && !bad2x.length && kept != null && kept > 370 && kept < 520 && shifted != null && shifted > 760 && shifted < 1000 && rateDetail.rateAfter === 1;
+      if (!okRate) fail('rate2x', rateDetail); else pass('rate2x', rateDetail);
+    }
     // 2. Cutover after A#75 → B#438, audio boundary within a few ms
     const before = t.length;
     const tB = await evaluate(`window.__v.cutAfter(75, window.__clips.B, 438)`);
@@ -176,7 +197,7 @@ async function runPair(a, b, label, { worker = false } = {}) {
     const sourceOk = expectStored ? (run.floorAtLoad === 'stored' && opt.source === 'stored' && opt.ms < 500) : (run.floorAtLoad === 'baseline' && opt.source === 'measured');
     if (opt.error || !(opt.decodeFps > 0) || opt.floorFps !== opt.decodeFps || !(opt.after >= 5 && opt.after <= baselineBridge) || !sourceOk) fail('optimize', { ...opt, baselineBridge, expected: expectStored ? 'stored' : 'measured' }); else pass('optimize', { ...opt, baselineBridge });
     run.stats = await stats();
-    if (!worker && run.stats.dropped - (run.coldStartDrops ?? 0) > 2) fail('dropped', { dropped: run.stats.dropped });
+    if (!worker && run.stats.dropped - (run.coldStartDrops ?? 0) - (run.rateDrops ?? 0) > 2) fail('dropped', { dropped: run.stats.dropped, rateDrops: run.rateDrops ?? 0 });
   } catch (e) { run.ok = verdict.ok = false; run.error = e.message; }
   run.consoleErrors = consoleErrors.splice(0);
   verdict.runs.push(run);
@@ -204,7 +225,7 @@ async function runCompat() {
     let wraps = 0; const bad = [];
     for (let i = 1; i < r.trace.length; i++) { const prev = r.trace[i - 1][1], cur = r.trace[i][1]; if (prev === 89 && cur === 30) wraps++; else if (cur < prev) bad.push([prev, cur]); }
     if (r.trace.length < 30 || wraps < 1 || bad.length || !r.events.includes('loop')) fail('attributeLoop', { frames: r.trace.length, wraps, outOfOrder: bad.slice(0, 5), loopEvents: r.events.filter((e) => e === 'loop').length }); else pass('attributeLoop', { frames: r.trace.length, wraps, loopEvents: r.events.filter((e) => e === 'loop').length });
-    const want = { playbackRate: 'NotSupportedError', srcObject: 'NotSupportedError', mediaKeys: 'NotSupportedError', defaultPlaybackRate: 'NotSupportedError', addTextTrack: 'NotSupportedError', requestPictureInPicture: 'NotSupportedError' };
+    const want = { srcObject: 'NotSupportedError', mediaKeys: 'NotSupportedError', addTextTrack: 'NotSupportedError', requestPictureInPicture: 'NotSupportedError', playbackRate: null, defaultPlaybackRate: null };   // playbackRate is real now
     const wrong = Object.entries(want).filter(([k, v]) => r.throws[k] !== v);
     if (wrong.length) fail('throws', { got: r.throws }); else pass('throws', { all: Object.keys(want).length });
     const props = { duration: r.duration > 0, frameRate: Math.abs(r.frameRate - 30) < 0.5, frameCount: r.frameCount > 100, readyState: r.readyState === 4, size: Math.abs(r.size[0] - 640) < 1 && Math.abs(r.size[1] - 360) < 1, timeupdates: r.timeupdates >= 5, muted: r.muted === true, loop: r.loop === true, videoSize: r.videoWidth === 1280 && r.videoHeight === 720 };
@@ -217,6 +238,7 @@ async function runCompat() {
     const ct = r.controls || {};
     const ctOk = ct.present && ct.playLabelPaused === 'Play' && ct.playsOnClick && ct.playLabelPlaying === 'Pause' && ct.pausesOnClick && ct.scrubSeeks === 42 && ct.scrubMax === r.frameCount - 1 && ct.mutedAfter === false && ct.nextFrame === 43 && ct.noFullscreen;
     if (!ctOk) fail('controls', ct); else pass('controls', { scrubSeeks: ct.scrubSeeks, nextFrame: ct.nextFrame, hiddenWhilePlaying: ct.hiddenWhilePlaying, timeLabel: ct.timeLabel });
+    if (r.rateWorks !== true || r.rateRange !== 'RangeError') fail('playbackRate', { rateWorks: r.rateWorks, rateRange: r.rateRange }); else pass('playbackRate', { setsAndReads: true, outOfRange: r.rateRange });
   } catch (e) { run.ok = verdict.ok = false; run.error = e.message; }
   run.consoleErrors = consoleErrors.splice(0);
   verdict.runs.push(run);

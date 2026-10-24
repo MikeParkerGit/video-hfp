@@ -101,9 +101,11 @@ presented frame; the metadata carries `frameNumber` and `clip`). Events at the m
 play/pause, a frame step either way, the time, a scrubber that works in frames and seeks on
 release, mute, full screen; it leaves while playing and comes back on a touch, a move or a key
 (space, arrows 5 s, shift+arrow one frame, j/l 10 s, m, f); `controlslist="nofullscreen"` hides
-the full-screen button. **Not supported, and setting them throws `NotSupportedError`** so nobody
-is surprised quietly: `playbackRate`, `srcObject`, `mediaKeys`, picture-in-picture, text tracks,
-remote playback.
+the full-screen button. **`playbackRate`** (0.25–4) scales the clock, keeping the frame on screen
+where it is; the audio keeps its pitch through a pitch shifter on the output (`preservesPitch`,
+default true; set it false and the pitch moves with the rate, the old-fashioned way); the `ratechange`
+event. **Not supported, and setting them throws `NotSupportedError`** so nobody is surprised
+quietly: `srcObject`, `mediaKeys`, picture-in-picture, text tracks, remote playback.
 
 **The frame-exact surface** — frames everywhere in our verbs, seconds only above:
 
@@ -311,6 +313,10 @@ the whole file with `decodeAudioData`.
   nothing plays takes one. Phones grant a handful; the probe measures how many.
 - **Memory** — bridges are raw, by ruling; forty prepared 1080p targets are 1.9 GB, past the critical
   boundary. The plan says so, and names the GOP, resolution and count levers.
+- **Playback rate** — at 2× a 30 fps clip wants a new media frame every display frame of a 60 Hz
+  screen, so a late display frame drops a media frame; `dropped` counts them (the display's doing,
+  not the decoder's). The pitch shifter is granular: fine for speech and music at ½–2×, audible
+  past that.
 - **Unmuting mid-play before a gesture** — a muted clip with audio runs on the wall clock; once
   the context starts, its already-scheduled audio pieces are late and are trimmed until the next segment.
 

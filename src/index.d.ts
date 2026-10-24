@@ -68,7 +68,9 @@ export class FrameSource {
 
 export class AudioEngine {
   constructor(ctx: AudioContext, opts?: { windowSeconds?: number; aheadSeconds?: number; maxWindows?: number });
-  ctx: AudioContext; master: GainNode; windowSeconds: number; aheadSeconds: number;
+  ctx: AudioContext; master: GainNode; /** what the listener hears (after the pitch shifter): tap this */ output: GainNode; windowSeconds: number; aheadSeconds: number;
+  rate: number; preservesPitch: boolean; /** the pitch shifter's average added delay, seconds */ pitchLatency: number;
+  setRate(rate: number, preservesPitch?: boolean): void;
   stats: { windowsDecoded: number; late: number; mode: 'webcodecs' | 'whole' | null };
   release(clip: Clip): void; dispose(): void;
 }
@@ -101,6 +103,8 @@ export class Player extends EventTarget {
   canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D; audioContext: AudioContext; audio: AudioEngine; masterGain: GainNode;
   lookahead: number; avOffset: number; worker: boolean;
   /** a muted player may run on the wall clock before a gesture, as a silent clip does */ muted: boolean;
+  /** playback rate, 0.25–4: media seconds per player second; a change keeps the frame on screen where it is and re-schedules the audio */ rate: number;
+  /** keep the pitch at a rate ≠ 1 (the output's pitch shifter); false where the context cannot */ preservesPitch: boolean;
   stats: { rendered: number; dropped: number; stalls: number; index: number; p: number; decoders: number; bridges: number; /** frames held: bridges + decoders' lookaheads */ memoryBytes: number; memoryLevel: 'ok' | 'warning' | 'critical'; /** where the floor came from */ floor: 'baseline' | 'stored' | 'measured'; /** the learned scale on the floor's answer, and how many hand-offs taught it */ bridgeScale: number; tuned: number; clock: 'audio' | 'wall'; recoveries: number };
   /** what bridges are sized from: the baseline floor until optimize() measures this device; settable */ floor: FloorProfile;
   /** what playback learned on top of the floor (stored for the origin) */ tune: Tune;
@@ -133,6 +137,7 @@ export class Player extends EventTarget {
   addEventListener(type: 'optimized', listener: (e: Event & { profile: HardwareProfile; floor: FloorProfile; source: 'stored' | 'measured' }) => void): void;
   addEventListener(type: 'handoff', listener: (e: HandoffEvent) => void): void;
   addEventListener(type: 'tuned', listener: (e: HandoffEvent & { scale: number }) => void): void;
+  addEventListener(type: 'ratechange', listener: (e: Event & { rate: number }) => void): void;
   addEventListener(type: string, listener: EventListenerOrEventListenerObject | null, options?: boolean | AddEventListenerOptions): void;
 }
 /** A hand-off observed: the bridge's length, how many of its frames were used before the decoder was ready (null when it was late), how many slots late, and the next length the rule chose (null: no change). */
@@ -187,7 +192,9 @@ export class VideoHFP extends HTMLElement {
   /** seconds; setting is a seek to the frame at that time */ currentTime: number;
   fastSeek(t: number): void; load(): void; canPlayType(type: string): '' | 'maybe' | 'probably'; captureStream(fps?: number): MediaStream;
   readonly textTracks: never[]; addTextTrack(): never; requestPictureInPicture(): Promise<never>;
-  /** throw NotSupportedError when set */ playbackRate: number; defaultPlaybackRate: number; preservesPitch: boolean; srcObject: null; mediaKeys: null; disablePictureInPicture: boolean; disableRemotePlayback: boolean;
+  /** 0.25–4; a change keeps the frame on screen where it is (RangeError outside) */ playbackRate: number; defaultPlaybackRate: number;
+  /** keep the pitch at a rate ≠ 1 through the output's pitch shifter (default true); reads false where the context cannot */ preservesPitch: boolean;
+  /** throw NotSupportedError when set */ srcObject: null; mediaKeys: null; disablePictureInPicture: boolean; disableRemotePlayback: boolean;
   /** play: resume, or the main clip (the whole clip, or [loop-start, loop-end) with `loop`); or exactly a range. Rejects with NotAllowedError when audio needs a gesture. */
   play(range?: { clip?: ClipTarget; from?: number; to?: number; loop?: boolean; startIndex?: number }): Promise<void>;
   pause(): void;
@@ -219,7 +226,7 @@ export class VideoHFP extends HTMLElement {
   addEventListener(type: 'handoff', listener: (e: HandoffEvent) => void): void;
   addEventListener(type: 'tuned', listener: (e: HandoffEvent & { scale: number }) => void): void;
   addEventListener(type: 'error' | 'decoderrefused', listener: (e: Event & { error?: Error; clip?: Clip }) => void): void;
-  addEventListener(type: 'loadstart' | 'durationchange' | 'loadedmetadata' | 'loadeddata' | 'canplay' | 'canplaythrough' | 'play' | 'playing' | 'waiting' | 'pause' | 'ended' | 'seeking' | 'seeked' | 'timeupdate' | 'volumechange' | 'emptied', listener: (e: Event) => void): void;
+  addEventListener(type: 'loadstart' | 'durationchange' | 'loadedmetadata' | 'loadeddata' | 'canplay' | 'canplaythrough' | 'play' | 'playing' | 'waiting' | 'pause' | 'ended' | 'seeking' | 'seeked' | 'timeupdate' | 'volumechange' | 'ratechange' | 'emptied', listener: (e: Event) => void): void;
   addEventListener(type: string, listener: EventListenerOrEventListenerObject | null, options?: boolean | AddEventListenerOptions): void;
 }
 /** <hfp-clip name src prepare-at>: a clip the parent <video-hfp> opens (and prepares at `prepare-at`). */
@@ -279,7 +286,7 @@ export type Action =
   | { kind: 'prepare'; count: number; clips?: Clip[] };
 export interface Remedy { kind: 're-encode' | 'prepare' | 'nearest-keyframe' | 'longer-loop' | 'fewer' | 'cold-start' | 'lower-resolution'; note: string; gop?: number; worstCaseMs?: number; bitrateCost?: string; index?: number; frames?: number; bytes?: number; count?: number }
 export interface Verdict { ok: boolean; kind: string; costMs: number; budgetMs: number | null; notes: string[]; remedies: Remedy[]; decodes?: number; decodersNeeded?: number; leadIn?: number; periodMs?: number; residentFrameBytes?: number; memoryLevel?: 'ok' | 'warning' | 'critical'; bridgeFrames?: number; bridgeBytes?: number; bridgeFramesPerTarget?: number | null }
-export function canDo(action: Action, ctx?: { profile?: Partial<HardwareProfile>; device?: Partial<HardwareProfile>; player?: { lookahead?: number } }): Verdict;
+export function canDo(action: Action & { /** the playback rate the action runs at (decodes per second scale with it) */ rate?: number }, ctx?: { profile?: Partial<HardwareProfile>; device?: Partial<HardwareProfile>; player?: { lookahead?: number; rate?: number } }): Verdict;
 
 /** The optimization suite: what you intend, checked against one profile, a list, or the known group. */
 export interface PlanSpec { width?: number; height?: number; fps?: number; gop?: number; reorderDepth?: number; frames?: number; bytesResident?: boolean; prepared?: number; switchWithinFrames?: number; cutoverLeadFrames?: number; loop?: { lengthFrames: number; leadInFrames?: number }; lookahead?: number }

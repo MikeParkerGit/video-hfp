@@ -22,8 +22,13 @@ export class AudioEngine {
     this.windowSeconds = windowSeconds;
     this.aheadSeconds = aheadSeconds;
     this.maxWindows = maxWindows;
-    this.master = ctx.createGain();
-    this.master.connect(ctx.destination);
+    this.master = ctx.createGain();      // volume lives here; segments connect to it
+    this.output = ctx.createGain();      // what the listener hears: the master, through the pitch shifter when there is one — tap this
+    this.master.connect(this.output); this.output.connect(ctx.destination);
+    // playback rate: every piece plays at `rate`; with `preservesPitch` a pitch shifter on the master bus
+    // (two delay lines with sawtooth-modulated delay, crossfaded — the classic trick, no worklet needed)
+    // brings the pitch back by 1/rate. `pitchLatency` is the average delay that shifter adds.
+    this.rate = 1; this.preservesPitch = true; this._shifter = null; this.pitchLatency = 0;
     this._clips = new Map();
     this.stats = { windowsDecoded: 0, late: 0, trimmedStarts: 0, mode: null };
   }
@@ -33,8 +38,22 @@ export class AudioEngine {
     return ca;
   }
   createSegment(spec) { return new AudioSegment(this, spec); }
+  /** Set the playback rate for pieces scheduled from now on (segments are re-created by the player at a change) and route the master through the pitch shifter, or not. */
+  setRate(rate, preservesPitch = this.preservesPitch) {
+    this.rate = rate; this.preservesPitch = preservesPitch;
+    const want = rate !== 1 && preservesPitch;
+    // only the master's own route changes; anything else tapping the master (an analyser, a recorder) stays connected
+    if (this._shifter) { try { this.master.disconnect(this._shifter.input); } catch { /* */ } this._shifter.dispose(); this._shifter = null; this.pitchLatency = 0; this.master.connect(this.output); }
+    if (!want) return;
+    try {
+      const shifter = new PitchShifter(this.ctx, 1 / rate);
+      try { this.master.disconnect(this.output); } catch { /* */ }
+      this.master.connect(shifter.input); shifter.output.connect(this.output);
+      this._shifter = shifter; this.pitchLatency = shifter.latency;
+    } catch { this._shifter = null; this.preservesPitch = false; try { this.master.connect(this.output); } catch { /* */ } }   // a context without these nodes: the pitch shifts, and preservesPitch says so
+  }
   release(clip) { const ca = this._clips.get(clip); if (ca) { ca.close(); this._clips.delete(clip); } }
-  dispose() { for (const ca of this._clips.values()) ca.close(); this._clips.clear(); this.master.disconnect(); }
+  dispose() { for (const ca of this._clips.values()) ca.close(); this._clips.clear(); this.master.disconnect(); this.output.disconnect(); if (this._shifter) { this._shifter.dispose(); this._shifter = null; } }
 }
 
 class ClipAudio {
@@ -185,8 +204,9 @@ class AudioSegment {
     this.gain.gain.linearRampToValueAtTime(1, Math.max(0, t0) + FADE);
     this.mFrom = clip.frameTime(spec.from) + clip.audioOffset;
     this.mTo = clip.rangeEnd(spec.to) + clip.audioOffset;
-    this.mStart = clip.frameTime(spec.startIndex) + clip.audioOffset;
+    this.mStart = (spec.mediaStart ?? clip.frameTime(spec.startIndex)) + clip.audioOffset;   // mediaStart: a sub-frame position (a rate change mid-frame)
     this.period = this.mTo - this.mFrom;
+    this.rate = spec.rate ?? engine.rate;    // media seconds per player second
     this._cursor = spec.tStart;              // player time scheduled up to
     this._media = this.mStart;               // media time at _cursor
     this._nodes = [];
@@ -204,8 +224,8 @@ class AudioSegment {
         if (m0 >= passEndMedia - 1e-9) { if (!this.spec.loop) break; m0 = this._media = this.mFrom; }
         const W = this.ca.windowSeconds;
         const wi = Math.floor(m0 / W);
-        const m1 = Math.min(passEndMedia, (wi + 1) * W, m0 + (Math.min(until, this._stopAt) - this._cursor) + 0.5);
-        const len = m1 - m0;
+        const m1 = Math.min(passEndMedia, (wi + 1) * W, m0 + (Math.min(until, this._stopAt) - this._cursor) * this.rate + 0.5);
+        const len = m1 - m0;   // media seconds; on the clock it lasts len / rate
         if (len <= 0) break;
         const buffer = await this.ca.window(wi);
         if (this._stopped) break;
@@ -216,21 +236,22 @@ class AudioSegment {
           node.connect(this.gain);
           const now = this.engine.ctx.currentTime;
           let offset = m0 - wi * W, dur = len, at = when;
+          if (this.rate !== 1) node.playbackRate.value = this.rate;
           if (when < now) {
             // Late: skip what should already have sounded and keep the timeline. A segment's first piece
-            // is often a few ms late by construction (switchNow schedules 5 ms ahead, under the audio
+            // is often a few ms late by construction (a cut schedules 5 ms ahead, under the audio
             // clock's update granularity); that is a trimmed start, not a late piece.
-            const lateBy = now - when;
-            if (this._cursor === this.spec.tStart && lateBy < 0.03) this.engine.stats.trimmedStarts++;
+            const lateBy = (now - when) * this.rate;   // in media seconds
+            if (this._cursor === this.spec.tStart && lateBy < 0.03 * this.rate) this.engine.stats.trimmedStarts++;
             else { this.late++; this.engine.stats.late++; }
-            if (lateBy >= len) { this._cursor += len; this._media = m1; continue; }
+            if (lateBy >= len) { this._cursor += len / this.rate; this._media = m1; continue; }
             offset += lateBy; dur -= lateBy; at = now;
           }
           node.start(at, offset, dur);
           this._nodes.push(node);
           node.onended = () => { const i = this._nodes.indexOf(node); if (i >= 0) this._nodes.splice(i, 1); };
         }
-        this._cursor += len; this._media = m1;
+        this._cursor += len / this.rate; this._media = m1;
       }
       // keep the next window warm
       const nextW = Math.floor((this._media >= this.mTo - 1e-9 ? this.mFrom : this._media) / this.ca.windowSeconds);
@@ -255,5 +276,46 @@ class AudioSegment {
     this._nodes.length = 0;
     try { this.gain.disconnect(); } catch { /* */ }
     this._stopped = true;
+  }
+}
+
+/**
+ * A pitch shifter from standard nodes: two delay lines whose delay ramps (a sawtooth driving delayTime),
+ * crossfaded by complementary triangles so each line's jump back happens while it is silent. A delay
+ * growing at s seconds per second plays its input at (1 − s): for a shift factor f, s = 1 − f. Grains
+ * of GRAIN seconds; the average added delay is |s|·GRAIN/2, reported as `latency`.
+ */
+const GRAIN = 0.1;
+class PitchShifter {
+  constructor(ctx, factor) {
+    this.ctx = ctx;
+    const s = 1 - factor;                                     // delay slope; negative when slowing down (the delay shrinks from a base)
+    const base = Math.max(0, -s * GRAIN);
+    this.latency = Math.abs(s) * GRAIN / 2;
+    this.input = ctx.createGain(); this.output = ctx.createGain();
+    const n = Math.round(GRAIN * ctx.sampleRate);
+    const saw = ctx.createBuffer(1, n, ctx.sampleRate), tri = ctx.createBuffer(1, n, ctx.sampleRate);
+    const sd = saw.getChannelData(0), td = tri.getChannelData(0);
+    for (let i = 0; i < n; i++) { const x = i / n; sd[i] = x; td[i] = x < 0.5 ? x * 2 : 2 - x * 2; }
+    this._nodes = [];
+    const t0 = ctx.currentTime + 0.01;
+    for (const phase of [0, GRAIN / 2]) {
+      const delay = ctx.createDelay(Math.max(1, Math.abs(s) * GRAIN + 0.05));
+      delay.delayTime.value = base;
+      const ramp = ctx.createBufferSource(); ramp.buffer = saw; ramp.loop = true;
+      const rampGain = ctx.createGain(); rampGain.gain.value = s * GRAIN;   // the sawtooth, 0…1, scaled to the delay it must add (or take)
+      ramp.connect(rampGain); rampGain.connect(delay.delayTime);
+      const fade = ctx.createGain(); fade.gain.value = 0;
+      const fadeDrive = ctx.createBufferSource(); fadeDrive.buffer = tri; fadeDrive.loop = true;
+      fadeDrive.connect(fade.gain);
+      this.input.connect(delay); delay.connect(fade); fade.connect(this.output);
+      ramp.start(t0, phase); fadeDrive.start(t0, phase);
+      this._nodes.push(delay, ramp, rampGain, fade, fadeDrive);
+    }
+  }
+  dispose() {
+    for (const n of this._nodes) { try { n.stop?.(); } catch { /* */ } try { n.disconnect(); } catch { /* */ } }
+    try { this.input.disconnect(); } catch { /* */ } try { this.output.disconnect(); } catch { /* */ }
+    this._nodes.length = 0;
   }
 }

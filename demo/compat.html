@@ -10,16 +10,20 @@ const events = window.__events = [], trace = window.__trace = [];
 for (const t of ['loadstart', 'durationchange', 'loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough', 'play', 'playing', 'waiting', 'pause', 'ended', 'seeking', 'seeked', 'volumechange', 'emptied', 'error', 'blocked', 'loop', 'switch'])
   v.addEventListener(t, () => events.push(t));
 let timeupdates = 0; v.addEventListener('timeupdate', () => timeupdates++);
-v.addEventListener('frame', (e) => trace.push([e.clip.name, e.index, e.p]));
+v.addEventListener('frame', (e) => trace.push([e.clip.name, e.index, e.p, Math.round(v.engine.now * 1000) / 1000, v.engine.stats.clock]));
 const q = new URLSearchParams(location.search);
 if (q.get('src')) v.setAttribute('src', `clips/${q.get('src')}`);
 await import('../src/element.js');
 const throws = {};
-for (const name of ['playbackRate', 'srcObject', 'mediaKeys', 'defaultPlaybackRate']) { try { v[name] = 2; throws[name] = null; } catch (e) { throws[name] = e.name; } }
+for (const name of ['srcObject', 'mediaKeys']) { try { v[name] = 2; throws[name] = null; } catch (e) { throws[name] = e.name; } }
+// playbackRate is real: it takes a value and gives it back; out of range throws; 1 again before the loop is measured
+let rateWorks = null; try { v.playbackRate = 2; rateWorks = v.playbackRate === 2; v.playbackRate = 1; } catch (e) { rateWorks = e.name; }
+let rateRange = null; try { v.playbackRate = 9; rateRange = 'no throw'; } catch (e) { rateRange = e.name; }
+throws.playbackRate = null; throws.defaultPlaybackRate = null;
 try { v.addTextTrack('subtitles'); throws.addTextTrack = null; } catch (e) { throws.addTextTrack = e.name; }
 throws.requestPictureInPicture = await v.requestPictureInPicture().then(() => null, (e) => e.name);
 await new Promise((r) => setTimeout(r, 4000));
-const probe = { done: true, events: events.slice(), timeupdates, trace: trace.slice(), throws, paused: v.paused, duration: v.duration, currentTime: v.currentTime, currentFrame: v.currentFrame, frameRate: v.frameRate, frameCount: v.frameCount, readyState: v.readyState, videoWidth: v.videoWidth, videoHeight: v.videoHeight, muted: v.muted, loop: v.loop, size: [v.getBoundingClientRect().width, v.getBoundingClientRect().height] };
+const probe = { done: true, rate: v.playbackRate, rateWorks, rateRange, events: events.slice(), timeupdates, trace: trace.slice(), throws, paused: v.paused, duration: v.duration, currentTime: v.currentTime, currentFrame: v.currentFrame, frameRate: v.frameRate, frameCount: v.frameCount, readyState: v.readyState, videoWidth: v.videoWidth, videoHeight: v.videoHeight, muted: v.muted, loop: v.loop, size: [v.getBoundingClientRect().width, v.getBoundingClientRect().height] };
 // pause, seek while paused, resume: the events a <video> would fire
 v.pause(); events.length = 0;
 v.seek(10);

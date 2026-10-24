@@ -16,7 +16,7 @@
 //         'frame' {clip, index, p}, 'loop' {clip, pass}, 'ended' {clip}, 'stall' {clip, p},
 //         'error' {error, clip, recovered}, 'blocked' {clip} (audio needs a gesture),
 //         'memory' {bytes, level, previous}, 'optimized' {profile, floor, source: 'stored' | 'measured'},
-//         'handoff' {clip, bridge, used, late, next}, 'tuned' {clip, bridge, used, late, next, scale}
+//         'handoff' {clip, bridge, used, late, next}, 'tuned' {clip, bridge, used, late, next, scale}, 'ratechange' {rate}
 //
 // The clock. Video time is the AudioContext's clock minus the device's output latency, so a
 // frame is drawn when its audio is HEARD, not when it was scheduled. A clip with no audio (or a
@@ -68,6 +68,7 @@ export class Player extends EventTarget {
     this.lookahead = lookahead;
     this.avOffset = avOffset;
     this.muted = false;          // set by the element: a muted clip with audio may run on the wall clock before a gesture
+    this._rate = 1;              // playback rate: media seconds per player second (see `rate`)
     this.worker = worker && typeof Worker !== 'undefined';   // decode in a Worker (frames transferred; the clock, audio and drawing stay here)
     this._pool = null;
     this.stats = { rendered: 0, dropped: 0, stalls: 0, index: -1, p: -1, decoders: 0, bridges: 0, memoryBytes: 0, memoryLevel: 'ok', clock: 'audio', recoveries: 0 };
@@ -97,7 +98,7 @@ export class Player extends EventTarget {
 
   // ---- clock -------------------------------------------------------------------------------
   get outputLatency() { return this.audioContext.outputLatency || 0; }
-  _audioNow() { return this.audioContext.currentTime - this.outputLatency + this._offset; }
+  _audioNow() { return this.audioContext.currentTime - this.outputLatency - this.audio.pitchLatency + this._offset; }
   _wallNow() { return this._wall.base + (performance.now() - this._wall.perf) / 1000; }
   /** The raw player clock (seconds). */
   _clock() {
@@ -124,9 +125,44 @@ export class Player extends EventTarget {
   /** The bridges held right now. */
   get prepared() { return this._prepared.slice(); }
 
+  /**
+   * Playback rate, 0.25–4: media seconds per player second. A change re-anchors what is playing so the
+   * frame on screen stays where it is, and re-schedules its audio from there at the new rate. With
+   * `preservesPitch` (default) a pitch shifter on the master bus keeps the pitch; without it, the
+   * pitch moves with the rate. Fires 'ratechange'.
+   */
+  get rate() { return this._rate; }
+  set rate(r) {
+    r = Number(r);
+    if (!(r >= 0.25 && r <= 4)) throw new RangeError(`rate ${r}: 0.25 to 4`);
+    if (r === this._rate) return;
+    const tc = this._clock(), old = this._rate;
+    this._rate = r;
+    this.audio.setRate(r, this.audio.preservesPitch);
+    for (const seg of [this._segment, this._next]) {
+      if (!seg) continue;
+      if (seg === this._segment && tc >= seg.t0) {
+        const elapsed = (tc - seg.t0) * old;                 // media seconds so far
+        seg.t0 = tc - elapsed / r;
+        if (seg.audio && !seg.audioStopped) {                 // the pieces ahead were scheduled at the old rate: start again from here
+          seg.audio.stopAt(tc);
+          const o = seg.loop ? elapsed % seg.period : Math.min(elapsed, seg.period);
+          seg.audio = this.audio.createSegment({ clip: seg.clip, from: seg.from, to: seg.to, loop: seg.loop, startIndex: seg.from, mediaStart: seg.clip.frameTime(seg.from) + o, tStart: tc, rate: r, ctxTime: (x) => this._ctxTime(x) });
+          seg.audio.ensure(tc + this.audio.aheadSeconds).catch((e) => this._emitError(e, seg.clip, true));
+        }
+      } else {
+        seg.t0 = seg.tStart - seg.startOffset / r;            // not started yet: its first frame keeps its time
+        if (seg.audio && !seg.audioStopped) { seg.audio.dispose(); seg.audio = this.audio.createSegment({ clip: seg.clip, from: seg.from, to: seg.to, loop: seg.loop, startIndex: seg.startIndex, tStart: seg.tStart, rate: r, ctxTime: (x) => this._ctxTime(x) }); seg.audio.ensure(seg.tStart + this.audio.aheadSeconds).catch((e) => this._emitError(e, seg.clip, true)); }
+      }
+    }
+    this.dispatchEvent(Object.assign(new Event('ratechange'), { rate: r }));
+  }
+  get preservesPitch() { return this.audio.preservesPitch; }
+  set preservesPitch(v) { if (!!v === this.audio.preservesPitch) return; this.audio.setRate(this._rate, !!v); }
+
   /** How many frames a bridge into `clip` at `frame` holds here: the floor's answer, scaled by what playback has learned, never under MIN_BRIDGE_FRAMES. */
   bridgeFramesFor(clip, frame) {
-    const n = Math.ceil(bridgeFrames(clip, frame, this.floor) * this.tune.scale);
+    const n = Math.ceil(bridgeFrames(clip, frame, this.floor) * this.tune.scale * this._rate);   // a bridge is frames; at a higher rate they pass faster
     return Math.min(clip.frameCount - frame, Math.max(MIN_BRIDGE_FRAMES, n));
   }
   _basis() { return this.floor.measuredAt ?? 'baseline'; }
@@ -314,9 +350,10 @@ export class Player extends EventTarget {
     if (this._pendingStart) { this._pendingStart.cancelled = true; this._pendingStart = null; }
     if (!(at >= seg.from && at < seg.to)) throw new RangeError(`cutAfter: frame ${at} is outside the playing range [${seg.from}, ${seg.to})`);
     const c = seg.clip;
-    let tB = seg.t0 + (c.frameEnd(at) - c.frameTime(seg.from));
+    let tB = seg.t0 + (c.frameEnd(at) - c.frameTime(seg.from)) / this._rate;
     const earliest = this._clock() + START_DELAY_SWITCH;
-    if (seg.loop) { if (tB < earliest) tB += Math.ceil((earliest - tB) / seg.period) * seg.period; }
+    const periodT = seg.period / this._rate;
+    if (seg.loop) { if (tB < earliest) tB += Math.ceil((earliest - tB) / periodT) * periodT; }
     else if (tB < earliest) tB = earliest;                     // `at` already went by: cut now
     this._schedule(clip, range, tB, START_DELAY_SWITCH, h);
     return tB;
@@ -335,7 +372,7 @@ export class Player extends EventTarget {
       // the current segment's audio was told to stop at the boundary: pick it up again from there
       const at = seg.audioStopAt;
       const where = this._pAt(seg, Math.max(at, t));
-      seg.audio = this.audio.createSegment({ clip: seg.clip, from: seg.from, to: seg.to, loop: seg.loop, startIndex: this._indexForP(seg, where ? where.p : 0), tStart: Math.max(at, t), ctxTime: (x) => this._ctxTime(x) });
+      seg.audio = this.audio.createSegment({ clip: seg.clip, from: seg.from, to: seg.to, loop: seg.loop, startIndex: this._indexForP(seg, where ? where.p : 0), tStart: Math.max(at, t), rate: this._rate, ctxTime: (x) => this._ctxTime(x) });
       seg.audioStopped = false;
       seg.audio.ensure(Math.max(at, t) + this.audio.aheadSeconds).catch((e) => this._emitError(e, seg.clip, true));
     }
@@ -497,10 +534,11 @@ export class Player extends EventTarget {
     const earliest = this._clock() + MIN_LEAD;
     if (tStart < earliest) tStart = this._clock() + minDelay;
     const period = clip.rangeEnd(s.to) - clip.frameTime(s.from);
-    const t0 = tStart - (clip.frameTime(s.startIndex) - clip.frameTime(s.from));
-    const seg = { clip, ...s, length: s.len, tStart, t0, period, lastP: s.startIndex - s.from - 1, lastIndex: -1, pass: 0, stallP: -1, endedFired: false, audio: null, audioStopped: false, audioStopAt: 0, recoveries: 0 };
+    const startOffset = clip.frameTime(s.startIndex) - clip.frameTime(s.from);
+    const t0 = tStart - startOffset / this._rate;
+    const seg = { clip, ...s, length: s.len, tStart, t0, startOffset, period, lastP: s.startIndex - s.from - 1, lastIndex: -1, pass: 0, stallP: -1, endedFired: false, audio: null, audioStopped: false, audioStopAt: 0, recoveries: 0 };
     if (clip.audio) {
-      seg.audio = this.audio.createSegment({ clip, from: s.from, to: s.to, loop: s.loop, startIndex: s.startIndex, tStart, ctxTime: (t) => this._ctxTime(t) });
+      seg.audio = this.audio.createSegment({ clip, from: s.from, to: s.to, loop: s.loop, startIndex: s.startIndex, tStart, rate: this._rate, ctxTime: (t) => this._ctxTime(t) });
       seg.audio.ensure(tStart + this.audio.aheadSeconds).catch((e) => this._emitError(e, clip, true));
       if (this.audioContext.state !== 'running' && !this.muted && this._blockedFor !== clip) { this._blockedFor = clip; this.dispatchEvent(Object.assign(new Event('blocked'), { clip })); }
     }
@@ -518,7 +556,7 @@ export class Player extends EventTarget {
   _indexForP(seg, p) { return seg.loop ? seg.from + ((p % seg.length) + seg.length) % seg.length : Math.min(seg.from + Math.max(0, p), seg.to - 1); }
   /** The presentation number due at player time `now`, or null before the segment starts; `over` past a non-looping end. */
   _pAt(seg, now) {
-    const elapsed = now - seg.t0;
+    const elapsed = (now - seg.t0) * this._rate;   // media seconds since frame `from`
     if (elapsed < 0) return null;
     const c = seg.clip;
     let k = 0, o = elapsed;
