@@ -1,7 +1,10 @@
-# Publish to npm from a tag push — no login on any machine. Needs the repository secret NPM_TOKEN
-# (a granular access token from npmjs.com with publish rights on video-hfp). A prerelease version
-# (0.2.0-beta.1) goes out under the `beta` dist-tag, a plain one under `latest`. `--provenance`
-# stamps the tarball with this commit and run, which npm shows as a verified link to the repo.
+# Publish to npm from a tag push — no login on any machine. Two ways to let it in:
+#   - trusted publishing (no token): on npmjs.com, the package's settings → Trusted publisher →
+#     GitHub Actions, repository MikeParkerGit/video-hfp, workflow publish.yml. Needs npm ≥ 11.5 on
+#     the runner (the upgrade step below) and `id-token: write` (set).
+#   - or the repository secret NPM_TOKEN (a granular access token with publish rights on video-hfp).
+# A prerelease version (0.2.0-beta.1) goes out under the `beta` dist-tag, a plain one under `latest`.
+# `--provenance` stamps the tarball with this commit and run — the verified link to the repo npm shows.
 name: publish
 on:
   push:
@@ -18,6 +21,7 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+      - run: npm install -g npm@latest   # trusted publishing needs npm ≥ 11.5
       - name: the tag must be the package's version
         run: |
           v=$(node -p "require('./package.json').version")
