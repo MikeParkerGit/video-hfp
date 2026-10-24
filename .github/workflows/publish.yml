@@ -27,6 +27,14 @@ jobs:
           v=$(node -p "require('./package.json').version")
           [ "v$v" = "${GITHUB_REF_NAME}" ] || { echo "tag ${GITHUB_REF_NAME} is not v$v"; exit 1; }
           echo "TAG=$([[ "$v" == *-* ]] && echo beta || echo latest)" >> "$GITHUB_ENV"
+      # the smoke test reads the frame-numbered clips ffmpeg generates (the ci workflow does the same)
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: cache test clips
+        uses: actions/cache@v4
+        with:
+          path: demo/clips
+          key: clips-${{ hashFiles('tools/make-test-clips.sh') }}
+      - run: test -f demo/clips/A.mp4 || npm run clips
       - run: npm test
       - run: npm publish --provenance --access public --tag "$TAG"
         env:
