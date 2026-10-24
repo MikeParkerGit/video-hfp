@@ -4,7 +4,7 @@
 // Progressive files only (a `moov`, no `moof` fragments). Reads through a ByteSource, so a
 // faststart file costs two small range requests; a file with its moov at the end costs one more.
 //
-// Boxes read: ftyp moov mvhd trak tkhd edts/elst mdia mdhd hdlr minf stbl stsd (avc1 avc3 hvc1
+// Boxes read: ftyp moov mvhd trak tkhd (the display matrix → rotation) edts/elst mdia mdhd hdlr minf stbl stsd (avc1 avc3 hvc1
 // hev1 vp09 av01 | mp4a Opus fLaC) stts ctts stss stsz stz2 stsc stco co64. Everything else is skipped.
 
 const td = new TextDecoder();
@@ -92,6 +92,19 @@ function parseTrak(b, s, e) {
   const tables = {};
   for (const x of boxes(b, stbl.start, stbl.end)) tables[x.type] = x;
 
+  // ---- the track header's display matrix: a phone's portrait recording is stored sideways with a 90°
+  // matrix, and <video> applies it. Points map as x' = a·x + c·y, y' = b·x + d·y (16.16 fixed), so the
+  // clockwise angle the frame must be turned for display is atan2(b, a); only the four right angles count.
+  let rotation = 0;
+  const tkhd = child(b, s, e, 'tkhd');
+  if (tkhd) {
+    const { version, p } = fullBox(b, tkhd.start);
+    const m = p + (version === 1 ? 32 : 20) + 16;   // past the ids and times, then reserved/layer/group/volume/reserved
+    const ma = i32(b, m) / 65536, mb = i32(b, m + 4) / 65536;
+    const deg = ((Math.round(Math.atan2(mb, ma) * 180 / Math.PI) % 360) + 360) % 360;
+    if (deg === 90 || deg === 180 || deg === 270) rotation = deg;
+  }
+
   // ---- edit list: how much of the media's start is not presented (AAC priming, B-frame delay)
   let editOffset = 0;   // media seconds to skip at the start
   let emptyEdit = 0;    // seconds of silence/blank before the media starts (rare)
@@ -118,7 +131,7 @@ function parseTrak(b, s, e) {
   const entry = [...boxes(b, sp + 4, stsd.end)][0];
   if (!entry) return null;
   const common = { kind: handler === 'vide' ? 'video' : 'audio', timescale, duration: mediaDuration / timescale, editOffset, emptyEdit };
-  const track = handler === 'vide' ? { ...common, ...videoEntry(b, entry) } : { ...common, ...audioEntry(b, entry) };
+  const track = handler === 'vide' ? { ...common, rotation, ...videoEntry(b, entry) } : { ...common, ...audioEntry(b, entry) };
   if (!track.codec) return null;
 
   // ---- sample tables → per-sample offset/size/dts/pts/key

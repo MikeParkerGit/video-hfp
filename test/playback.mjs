@@ -217,6 +217,26 @@ async function runCompat() {
   run.consoleErrors = consoleErrors.splice(0);
   verdict.runs.push(run);
 }
+/** A rotated clip (a phone's portrait recording: a 90° display matrix) draws upright: the element's size and the canvas are portrait. */
+async function runRotated() {
+  const run = { label: 'rotation (A-rot.mp4: a 90° display matrix, drawn upright)', ok: true, checks: {} };
+  if (!existsSync(path.join(ROOT, 'demo/clips/A-rot.mp4'))) { run.skipped = 'no A-rot.mp4 (ffmpeg without -display_rotation)'; verdict.runs.push(run); return; }
+  if (support && !support.h264) { run.skipped = 'this browser has no H.264 decoder'; verdict.runs.push(run); return; }
+  try {
+    await send('Page.navigate', { url: `http://localhost:${port}/demo/?a=A-rot.mp4&b=B.mp4` });
+    let status = '';
+    for (let i = 0; i < 120; i++) { status = (await evaluate(`document.getElementById('status')?.textContent || ''`)) || ''; if (/B \(.*supported:/.test(status) || /load failed/.test(status)) break; await sleep(500); }
+    if (!/B \(.*supported: true/.test(status)) throw new Error('clips did not load: ' + status);
+    await click('Play A'); await sleep(2500);
+    const r = await evaluate(`JSON.stringify({ rotation: window.__clips.A.rotation, videoWidth: window.__v.videoWidth, videoHeight: window.__v.videoHeight, canvas: [window.__v.canvas.width, window.__v.canvas.height], rendered: window.__player.stats.rendered, stalls: window.__player.stats.stalls, box: [Math.round(window.__v.getBoundingClientRect().width), Math.round(window.__v.getBoundingClientRect().height)] })`).then(JSON.parse);
+    await click('Stop');
+    const ok = r.rotation === 90 && r.videoWidth === 720 && r.videoHeight === 1280 && r.canvas[0] === 720 && r.canvas[1] === 1280 && r.rendered > 30 && r.stalls <= 1;
+    run.checks.upright = { ok, ...r };
+    if (!ok) run.ok = verdict.ok = false;
+  } catch (e) { run.ok = verdict.ok = false; run.error = e.message; }
+  run.consoleErrors = consoleErrors.splice(0);
+  verdict.runs.push(run);
+}
 /** play() before a gesture (a second Chromium; the page suspends its AudioContext for good, as the autoplay policy does): audio → NotAllowedError + `blocked`; muted → plays on the wall clock. */
 function runGesture() {
   const run = { label: 'play() before a gesture (gesture-probe.html: a suspended AudioContext that will not resume)', ok: true, checks: {} };
@@ -238,6 +258,7 @@ try {
   if (support?.h264) await runPair('A-normal.mp4', 'B.mp4', 'decode in a Worker, busy main thread during the loop', { worker: true });
   else await runPair('A-vp9.webm', 'B-vp9.webm', 'decode in a Worker, busy main thread during the loop (VP9: no H.264 here)', { worker: true });
   await runCompat();
+  await runRotated();
   runGesture();
   const ran = verdict.runs.filter((r) => !r.skipped);
   if (!ran.length) verdict.ok = false;

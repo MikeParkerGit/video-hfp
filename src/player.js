@@ -363,11 +363,14 @@ export class Player extends EventTarget {
     if (this._ownsContext) this.audioContext.close().catch(() => {});
   }
 
-  /** Draw one frame onto the canvas (the element uses it for posters and paused seeks). */
-  draw(frame) {
+  /** Draw one frame onto the canvas, turned by the clip's rotation (the element uses it for posters and paused seeks). */
+  draw(frame, rotation = 0) {
     const w = frame.displayWidth, h = frame.displayHeight;
-    if (this.canvas.width !== w || this.canvas.height !== h) { this.canvas.width = w; this.canvas.height = h; }
-    this.ctx.drawImage(frame, 0, 0, w, h);
+    const cw = rotation % 180 ? h : w, ch = rotation % 180 ? w : h;   // the canvas is the upright size
+    if (this.canvas.width !== cw || this.canvas.height !== ch) { this.canvas.width = cw; this.canvas.height = ch; }
+    if (!rotation) { this.ctx.drawImage(frame, 0, 0, w, h); return; }
+    const ctx = this.ctx;
+    ctx.save(); ctx.translate(cw / 2, ch / 2); ctx.rotate(rotation * Math.PI / 180); ctx.drawImage(frame, -w / 2, -h / 2, w, h); ctx.restore();
   }
 
   // ---- internals -------------------------------------------------------------------------
@@ -636,7 +639,7 @@ export class Player extends EventTarget {
         const item = src.peek();
         if (item && item.p === p) {
           src.shift();
-          this.draw(item.frame);
+          this.draw(item.frame, c.rotation);
           item.frame.close();
           seg.lastP = p; seg.lastIndex = item.index;
           this.stats.rendered++;

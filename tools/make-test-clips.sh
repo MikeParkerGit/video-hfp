@@ -27,4 +27,7 @@ for n in A B; do
 done
 node tools/pack.js demo/clips/A-src.mp4 demo/clips/A-normal.mp4 --gop 250 --json &
 wait
+# A-rot.mp4: A with a display matrix like a phone's portrait recording — a metadata-only copy, the samples are A's
+# (ffmpeg ≥ 5.1 for -display_rotation; an older ffmpeg leaves no A-rot and the tests skip it)
+ffmpeg -v error -display_rotation -90 -i demo/clips/A.mp4 -c copy -y demo/clips/A-rot.mp4 2>/dev/null || echo "ffmpeg has no -display_rotation; A-rot.mp4 skipped"
 ls -la demo/clips

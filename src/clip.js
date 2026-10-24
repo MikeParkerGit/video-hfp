@@ -24,6 +24,9 @@ export class Clip {
     this.width = v.codedWidth;
     this.height = v.codedHeight;
     this.pixelAspect = v.pixelAspect || 1;
+    this.rotation = v.rotation || 0;                           // degrees clockwise the stored frame is turned for display (a phone's portrait recording: 90)
+    this.displayWidth = this.rotation % 180 ? this.height : this.width;   // the upright size
+    this.displayHeight = this.rotation % 180 ? this.width : this.height;
     this.description = v.description;
     this.samples = v.samples;                      // decode order
     const n = this.frameCount = this.samples.length;
@@ -135,7 +138,7 @@ export class Clip {
   }
   /** Everything a lightweight copy needs (a worker, a listing): no samples, no bytes. */
   describe() {
-    return { name: this.name, url: this.url, container: this.container, codec: this.codec, width: this.width, height: this.height, fps: this.fps, vfr: this.vfr,
+    return { name: this.name, url: this.url, container: this.container, codec: this.codec, width: this.width, height: this.height, rotation: this.rotation, displayWidth: this.displayWidth, displayHeight: this.displayHeight, fps: this.fps, vfr: this.vfr,
       frameCount: this.frameCount, gop: this.gop, keyframes: this.keyframes.length, duration: this.duration,
       audio: this.audio ? { codec: this.audio.codec, sampleRate: this.audio.sampleRate, channels: this.audio.channels } : null };
   }

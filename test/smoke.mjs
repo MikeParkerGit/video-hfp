@@ -20,7 +20,7 @@ import { KNOWN_PROFILES, knownProfile, HARDWARE_FLOOR } from '../src/profiles.js
 import { bridgeFrames, maxBridgeFrames, adjustBridge, MIN_BRIDGE_FRAMES } from '../src/bridge.js';
 import { syntheticClip } from '../src/plan.js';
 
-const clips = ['demo/clips/A.mp4', 'demo/clips/B.mp4', 'demo/clips/A-normal.mp4', 'demo/clips/A-vp9.webm'].filter(existsSync);
+const clips = ['demo/clips/A.mp4', 'demo/clips/B.mp4', 'demo/clips/A-normal.mp4', 'demo/clips/A-vp9.webm', 'demo/clips/A-rot.mp4'].filter(existsSync);
 assert.ok(clips.length >= 3, 'run `npm run clips` first');
 const probe = (f, stream, what) => JSON.parse(spawnSync('ffprobe', ['-v', 'error', '-select_streams', stream, `-show_${what}`, '-of', 'json', f], { maxBuffer: 1 << 26 }).stdout);
 const open = async (f) => { const b = new Uint8Array(readFileSync(f)); const s = new BufferSource(b); const idx = f.endsWith('.webm') ? await demuxWebm(s) : await demuxMp4(s); return new Clip(idx, s, { name: f }); };
@@ -104,6 +104,20 @@ if (normal.gop > 60) { assert.ok(!r2.ok, 'frame 438 of a long-GOP file within 3 
 const r3 = canDo({ kind: 'switch', clip: strict, index: 438, withinFrames: 3 }, { device });
 assert.ok(r3.ok, 'frame 438 of the GOP-12 file within 3 frames: fine');
 console.log(`✓ budget model: first frame ok; frame 438 of a GOP-${normal.gop} file → ${r2.ok ? 'ok' : 'no: ' + r2.remedies.map((x) => x.kind + (x.gop ? ' gop ' + x.gop : '')).join(', ')}; GOP-12 → ok`);
+
+// ---- 3b. rotation: a phone's portrait recording is stored sideways with a display matrix ----------
+{
+  const plain = await open(clips[0]);
+  assert.equal(plain.rotation, 0, 'A has no rotation'); assert.equal(plain.displayWidth, plain.width, 'upright size = coded size');
+  const rot = clips.find((f) => f.endsWith('A-rot.mp4'));
+  if (rot) {
+    const r = await open(rot);
+    assert.equal(r.rotation, 90, 'A-rot (ffmpeg -display_rotation -90, as a phone stores portrait) → 90° clockwise for display');
+    assert.deepEqual([r.width, r.height, r.displayWidth, r.displayHeight], [1280, 720, 720, 1280], 'coded 1280×720, upright 720×1280');
+    assert.equal(r.describe().rotation, 90, 'describe() reports it');
+    console.log('✓ rotation: A-rot.mp4 → 90° clockwise, upright 720×1280; A → 0');
+  } else console.log('· rotation: no A-rot.mp4 (ffmpeg without -display_rotation); skipped');
+}
 
 // ---- 4. the bridge formula: per target, solved against the hand-off frame, from the clip's index and the floor --
 {

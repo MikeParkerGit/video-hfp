@@ -114,7 +114,7 @@ window.__mtvPlayer = window.__player = player;
 window.__trace = [];
 
 const variant = support.h264 ? 'mp4' : 'vp9';
-const choices = variant === 'mp4' ? ['A.mp4', 'B.mp4', 'A-normal.mp4', 'A-vp9.webm', 'B-vp9.webm'] : ['A-vp9.webm', 'B-vp9.webm', 'A.mp4', 'B.mp4', 'A-normal.mp4'];
+const choices = variant === 'mp4' ? ['A.mp4', 'B.mp4', 'A-normal.mp4', 'A-rot.mp4', 'A-vp9.webm', 'B-vp9.webm'] : ['A-vp9.webm', 'B-vp9.webm', 'A.mp4', 'B.mp4', 'A-normal.mp4', 'A-rot.mp4'];
 for (const sel of [$('selA'), $('selB')]) for (const c of choices) { const o = document.createElement('option'); o.value = o.textContent = c; sel.append(o); }
 $('selA').value = q.get('a') || choices[0];
 $('selB').value = q.get('b') || choices[1];
@@ -133,7 +133,7 @@ async function load() {
   v.src = `clips/${$('selA').value}`;
   [A, B] = await Promise.all([pa, pb]);
   status(`support: ${JSON.stringify(support)}
-A (${A.url.split('/').pop()}): ${A.codec} ${A.width}x${A.height} ${A.frameCount}f @${A.fps.toFixed(3)} gop ${A.gop} reorder ${A.reorderDepth} audio ${A.audio ? A.audio.codec : 'no'} source ${A.source.url && 'windowBytes' in A.source ? 'byte ranges' : 'whole file'}  supported: ${await A.isSupported()}
+A (${A.url.split('/').pop()}): ${A.codec} ${A.width}x${A.height}${A.rotation ? ` rotated ${A.rotation}° → ${A.displayWidth}x${A.displayHeight}` : ''} ${A.frameCount}f @${A.fps.toFixed(3)} gop ${A.gop} reorder ${A.reorderDepth} audio ${A.audio ? A.audio.codec : 'no'} source ${A.source.url && 'windowBytes' in A.source ? 'byte ranges' : 'whole file'}  supported: ${await A.isSupported()}
 B (${B.url.split('/').pop()}): ${B.codec} ${B.frameCount}f gop ${B.gop}  bridge at ${$('sfrom').value}: ${player.bridgeFramesFor(B, Number($('sfrom').value))} frames on ${player.floor.measuredAt ? 'this device (optimized)' : 'the baseline floor'}  supported: ${await B.isSupported()}
 profile: ${device ? `${device.label} — decode ${device.decodeFps} fps, start-up ${device.decoderStartupMs} ms${device.decoderRestartMs != null ? `, re-target ${device.decoderRestartMs} ms` : ''}, decoders ${device.decoders}${device.decodersAtLeast ? '+' : ''}, encode ${device.encodeFps ?? '–'} fps, refresh ${device.refreshHz} Hz${device.notes?.length ? ' — ' + device.notes.join('; ') : ''}` : 'not measured (the player does not probe on its own; press "Measure this device")'}
 audioContext: ${player.audioContext.sampleRate} Hz, baseLatency ${(player.audioContext.baseLatency * 1000).toFixed(1)} ms, outputLatency ${(player.outputLatency * 1000).toFixed(1)} ms`);

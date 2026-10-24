@@ -150,8 +150,8 @@ export class VideoHFP extends HTMLElementBase {
   get networkState() { return this._networkState; }
   get error() { return this._error; }
   get duration() { const c = this._currentClip(); return c ? c.duration : NaN; }
-  get videoWidth() { return this._currentClip()?.width ?? 0; }
-  get videoHeight() { return this._currentClip()?.height ?? 0; }
+  get videoWidth() { return this._currentClip()?.displayWidth ?? 0; }
+  get videoHeight() { return this._currentClip()?.displayHeight ?? 0; }
   /** Seconds, for compatibility; setting is a seek to the frame at that time. */
   get currentTime() { const c = this._currentClip(); if (!c) return 0; const f = this.currentFrame; return f >= 0 ? c.frameTime(f) : 0; }
   set currentTime(t) { const c = this._currentClip(); if (!c) return; this.seek(c.frameAt(Number(t) || 0)); }
@@ -343,7 +343,7 @@ export class VideoHFP extends HTMLElementBase {
   /** Decode one frame (a one-frame bridge) and draw it: posters, paused seeks, preload=auto. */
   async _showFrame(clip, index) {
     const bridge = await buildBridge(clip, index, { count: 1 });
-    try { const f = bridge.frameAt(index); try { this.engine.draw(f); } finally { f.close(); } } finally { bridge.close(); }
+    try { const f = bridge.frameAt(index); try { this.engine.draw(f, clip.rotation); } finally { f.close(); } } finally { bridge.close(); }
     if (this._readyState < 2) this._readyState = 2;
     this._firstData(clip);
   }
@@ -364,7 +364,7 @@ export class VideoHFP extends HTMLElementBase {
     if (this._rvfc.size) {
       const cbs = [...this._rvfc.values()]; this._rvfc.clear();
       const now = performance.now();
-      const meta = { presentationTime: now, expectedDisplayTime: now, width: e.clip.width, height: e.clip.height, mediaTime: e.clip.frameTime(e.index), presentedFrames: this._engine.stats.rendered, frameNumber: e.index, clip: e.clip };
+      const meta = { presentationTime: now, expectedDisplayTime: now, width: e.clip.displayWidth, height: e.clip.displayHeight, mediaTime: e.clip.frameTime(e.index), presentedFrames: this._engine.stats.rendered, frameNumber: e.index, clip: e.clip };
       for (const cb of cbs) { try { cb(now, meta); } catch (err) { setTimeout(() => { throw err; }); } }
     }
     if (now_() - this._lastTimeupdate >= TIMEUPDATE_MS) { this._lastTimeupdate = now_(); this._fire('timeupdate'); }
@@ -383,7 +383,7 @@ export class VideoHFP extends HTMLElementBase {
   /** Like <video>: the width/height attributes when given, else the clip's own size; one of them given, the other follows the aspect ratio. */
   _applySize() {
     const w = this.width, h = this.height, c = this._main;
-    const vw = c?.width ?? 0, vh = c?.height ?? 0;
+    const vw = c?.displayWidth ?? 0, vh = c?.displayHeight ?? 0;
     if (vw && vh) this.style.setProperty('--video-hfp-aspect', `${vw} / ${vh}`);
     if (w && h) { this.style.setProperty('--video-hfp-width', `${w}px`); this.style.setProperty('--video-hfp-height', `${h}px`); }
     else if (w) { this.style.setProperty('--video-hfp-width', `${w}px`); this.style.removeProperty('--video-hfp-height'); }

@@ -295,6 +295,8 @@ the whole file with `decodeAudioData`.
 - **DRM** — no. Protected content is readable only by the browser's own pipeline.
 - **A codec the device does not decode** — no, until a WebAssembly decoder is added (slow, large).
 - **HDR / wide colour** — plays, mapped to SDR by the 2D canvas.
+- **Rotation** — a phone's portrait recording (a 90° display matrix) draws upright; `clip.rotation`, and the
+  element's `videoWidth`/`videoHeight` are the upright size.
 - **Fragmented MP4** (`moof`) — not yet; remux progressive (`-movflags +faststart`).
 - **WebM opens with one pass over the file** (Matroska has no central sample table); MP4 opens on its `moov`.
 - **Presentation** — a `<video>` can sit on a hardware overlay with the page idle; this draws

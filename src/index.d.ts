@@ -3,7 +3,7 @@
 
 export interface VideoSample { offset: number; size: number; dts: number; pts: number; duration: number; durationUnits?: number; key: boolean }
 export interface AudioSample { offset: number; size: number; dts: number; pts: number; duration: number; key: boolean }
-export interface VideoTrack { kind: 'video'; codec: string | null; format: string; codedWidth: number; codedHeight: number; description?: Uint8Array; pixelAspect?: number; timescale: number; duration: number; editOffset: number; samples: VideoSample[] }
+export interface VideoTrack { kind: 'video'; codec: string | null; format: string; codedWidth: number; codedHeight: number; rotation?: number; description?: Uint8Array; pixelAspect?: number; timescale: number; duration: number; editOffset: number; samples: VideoSample[] }
 export interface AudioTrack { kind: 'audio'; codec: string | null; format: string; sampleRate: number; channels: number; description?: Uint8Array; preSkip: number; duration: number; editOffset: number; samples: AudioSample[] }
 export interface DemuxResult { container: 'mp4' | 'webm'; duration: number; video: VideoTrack; audio: AudioTrack | null }
 
@@ -36,6 +36,8 @@ export class Clip {
   constructor(index: DemuxResult, source: ByteSource, opts?: { name?: string; url?: string | null });
   name: string; url: string | null; container: string; source: ByteSource;
   codec: string; format: string; width: number; height: number; pixelAspect: number; description?: Uint8Array;
+  /** degrees clockwise the stored frame is turned for display (a phone's portrait recording: 90), from the container's display matrix */ rotation: 0 | 90 | 180 | 270;
+  /** the upright size: width/height swapped for 90 and 270 */ displayWidth: number; displayHeight: number;
   audio: AudioTrack | null; audioOffset: number;
   samples: VideoSample[]; frameCount: number; frameDuration: number; fps: number; fpsNum: number; fpsDen: number; vfr: boolean;
   frameTimes: Float64Array; frameDurations: Float64Array; keyframes: number[]; gop: number; reorderDepth: number; duration: number;
@@ -43,7 +45,7 @@ export class Clip {
   isKeyframe(p: number): boolean; keyframeAtOrBefore(p: number): number; decodeIndexOf(p: number): number; presIndexOf(d: number): number; lastDecodeIndexBefore(to: number): number;
   sampleBytes(d: number): Uint8Array | null; hasDecodeRange(d0: number, d1: number): boolean; ensureDecodeRange(d0: number, d1: number): Promise<void>; pinRange(from: number | null, to?: number): void;
   decoderConfig(): VideoDecoderConfig; isSupported(): Promise<boolean>;
-  describe(): { name: string; url: string | null; container: string; codec: string; width: number; height: number; fps: number; vfr: boolean; frameCount: number; gop: number; keyframes: number; duration: number; audio: { codec: string; sampleRate: number; channels: number } | null };
+  describe(): { name: string; url: string | null; container: string; codec: string; width: number; height: number; rotation: number; displayWidth: number; displayHeight: number; fps: number; vfr: boolean; frameCount: number; gop: number; keyframes: number; duration: number; audio: { codec: string; sampleRate: number; channels: number } | null };
   close(): void;
 }
 export const WHOLE_FILE_LIMIT: number;
@@ -118,7 +120,7 @@ export class Player extends EventTarget {
   cutAfter(at: number, target: Clip | Prepared, frame?: number, opts?: CutRange): number;
   cancelCut(): void;
   stop(): void; destroy(): void;
-  /** Draw one frame onto the canvas. */ draw(frame: VideoFrame): void;
+  /** Draw one frame onto the canvas, turned by `rotation` degrees clockwise (the canvas takes the upright size). */ draw(frame: VideoFrame, rotation?: number): void;
   addEventListener(type: 'segmentstart', listener: (e: SegmentStartEvent) => void): void;
   addEventListener(type: 'switch', listener: (e: SwitchEvent) => void): void;
   addEventListener(type: 'frame', listener: (e: FrameEvent) => void): void;

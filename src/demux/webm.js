@@ -7,7 +7,7 @@
 const ID = {
   EBML: 0x1a45dfa3, Segment: 0x18538067, Info: 0x1549a966, TimecodeScale: 0x2ad7b1, Duration: 0x4489,
   Tracks: 0x1654ae6b, TrackEntry: 0xae, TrackNumber: 0xd7, TrackType: 0x83, CodecID: 0x86, CodecPrivate: 0x63a2,
-  CodecDelay: 0x56aa, SeekPreRoll: 0x56bb, DefaultDuration: 0x23e383, Video: 0xe0, PixelWidth: 0xb0, PixelHeight: 0xba,
+  CodecDelay: 0x56aa, SeekPreRoll: 0x56bb, DefaultDuration: 0x23e383, Video: 0xe0, PixelWidth: 0xb0, PixelHeight: 0xba, Projection: 0x7671, ProjectionPoseRoll: 0x7675,
   Audio: 0xe1, SamplingFrequency: 0xb5, Channels: 0x9f, BitDepth: 0x6264,
   Cluster: 0x1f43b675, Timecode: 0xe7, SimpleBlock: 0xa3, BlockGroup: 0xa0, Block: 0xa1, BlockDuration: 0x9b, ReferenceBlock: 0xfb,
   Cues: 0x1c53bb6b, SeekHead: 0x114d9b74, Void: 0xec, Tags: 0x1254c367, Attachments: 0x1941a469, Chapters: 0x1043a770,
@@ -67,7 +67,15 @@ export async function demuxWebm(src) {
             case ID.CodecDelay: t.codecDelay = uintOf(await r.bytes(tsize)); break;
             case ID.SeekPreRoll: t.seekPreRoll = uintOf(await r.bytes(tsize)); break;
             case ID.DefaultDuration: t.defaultDuration = uintOf(await r.bytes(tsize)); break;
-            case ID.Video: await parseChildren(r, tend, async (vid, vsize) => { if (vid === ID.PixelWidth) t.width = uintOf(await r.bytes(vsize)); else if (vid === ID.PixelHeight) t.height = uintOf(await r.bytes(vsize)); else r.pos += vsize; }); break;
+            case ID.Video: await parseChildren(r, tend, async (vid, vsize) => {
+              if (vid === ID.PixelWidth) t.width = uintOf(await r.bytes(vsize));
+              else if (vid === ID.PixelHeight) t.height = uintOf(await r.bytes(vsize));
+              else if (vid === ID.Projection) await parseChildren(r, r.pos + vsize, async (pid, psize) => {   // a roll is the only rotation Matroska carries
+                if (pid === ID.ProjectionPoseRoll) { const deg = ((Math.round(floatOf(await r.bytes(psize))) % 360) + 360) % 360; t.rotation = deg === 90 || deg === 180 || deg === 270 ? deg : 0; }
+                else r.pos += psize;
+              });
+              else r.pos += vsize;
+            }); break;
             case ID.Audio: await parseChildren(r, tend, async (aid, asize) => { if (aid === ID.SamplingFrequency) t.sampleRate = floatOf(await r.bytes(asize)); else if (aid === ID.Channels) t.channels = uintOf(await r.bytes(asize)); else r.pos += asize; }); break;
             default: r.pos = tend;
           }
@@ -105,7 +113,7 @@ export async function demuxWebm(src) {
   const out = { container: 'webm', duration: duration * timecodeScale / 1e9, video: null, audio: null };
   const vb = blocks.filter((x) => x.track === video.number);
   const vdur = video.defaultDuration / 1e9;
-  out.video = { kind: 'video', ...videoCodec(video), codedWidth: video.width, codedHeight: video.height, editOffset: 0, emptyEdit: 0, duration: 0, timescale: 1e9,
+  out.video = { kind: 'video', ...videoCodec(video), codedWidth: video.width, codedHeight: video.height, rotation: video.rotation || 0, editOffset: 0, emptyEdit: 0, duration: 0, timescale: 1e9,
     samples: vb.map((x, i) => { const d = x.duration || vdur || (i + 1 < vb.length ? Math.abs(vb[i + 1].time - x.time) : vdur); return { offset: x.offset, size: x.size, dts: x.time, pts: x.time, duration: d, durationUnits: Math.round(d * 1e9), key: x.key }; }) };
   // Matroska blocks are in decode order with presentation timestamps; dts is unknown, so synthesize one that
   // keeps decode order monotonic (the index only needs the order and the pts).
