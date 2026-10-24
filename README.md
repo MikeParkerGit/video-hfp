@@ -21,7 +21,7 @@ Plain ES modules, no build step, no dependencies. Chrome/Edge (WebView2, Android
 Safari 16.4+ / WKWebView, Firefox 130+ (desktop), WebKitGTK ≥ 2.44 — see the support table.
 
 ```sh
-npm install video-hfp@beta      # 0.2.0-beta.1 — a beta until the phone passes are done; `latest` is empty until then
+npm install video-hfp@beta      # 0.2.0-beta.2 — a beta until the phone passes are done; `latest` is empty until then
 ```
 
 ```html
