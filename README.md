@@ -97,9 +97,13 @@ compatibility; setting is a seek), `fastSeek`, `requestVideoFrameCallback` (one 
 presented frame; the metadata carries `frameNumber` and `clip`). Events at the matching moments:
 `loadstart`, `durationchange`, `loadedmetadata`, `loadeddata`, `canplay`, `canplaythrough`, `play`,
 `playing`, `waiting` (a stall), `pause`, `ended`, `seeking`, `seeked`, `timeupdate`, `volumechange`,
-`emptied`, `error`. **Not supported, and setting them throws `NotSupportedError`** so nobody is
-surprised quietly: `playbackRate`, `srcObject`, `mediaKeys`, picture-in-picture, text tracks,
-remote playback. `controls` is accepted and not drawn (a bar of our own is a later item).
+`emptied`, `error`. **`controls` draws the element's own bar** — a drop-in for `<video controls>`:
+play/pause, a frame step either way, the time, a scrubber that works in frames and seeks on
+release, mute, full screen; it leaves while playing and comes back on a touch, a move or a key
+(space, arrows 5 s, shift+arrow one frame, j/l 10 s, m, f); `controlslist="nofullscreen"` hides
+the full-screen button. **Not supported, and setting them throws `NotSupportedError`** so nobody
+is surprised quietly: `playbackRate`, `srcObject`, `mediaKeys`, picture-in-picture, text tracks,
+remote playback.
 
 **The frame-exact surface** — frames everywhere in our verbs, seconds only above:
 

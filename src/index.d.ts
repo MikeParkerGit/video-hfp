@@ -178,7 +178,8 @@ export type ClipTarget = Clip | string | Prepared;
 export class VideoHFP extends HTMLElement {
   // the <video> surface
   src: string; readonly currentSrc: string; width: number; height: number; poster: string; preload: 'none' | 'metadata' | 'auto' | string;
-  autoplay: boolean; loop: boolean; playsInline: boolean; crossOrigin: string | null; controls: boolean;
+  autoplay: boolean; loop: boolean; playsInline: boolean; crossOrigin: string | null;
+  /** the element's own bar (play/pause, frame step, time, a scrubber in frames, mute, full screen) */ controls: boolean; controlsList: string[];
   muted: boolean; defaultMuted: boolean; volume: number;
   readonly paused: boolean; readonly ended: boolean; readonly seeking: boolean; readonly readyState: 0 | 1 | 2 | 3 | 4; readonly networkState: 0 | 1 | 2 | 3;
   readonly error: { code: number; message: string; error?: Error; clip?: Clip } | null;

@@ -213,6 +213,10 @@ async function runCompat() {
     const sp = r.afterSeekPaused, rs = r.afterResume;
     if (!sp.paused || sp.currentFrame !== 10 || !sp.events.includes('seeking') || !sp.events.includes('seeked')) fail('seekPaused', sp); else pass('seekPaused', { events: sp.events, currentFrame: sp.currentFrame });
     if (rs.paused || !rs.events.includes('play') || !rs.events.includes('playing') || rs.firstFrames[0] !== 10) fail('resume', rs); else pass('resume', { events: rs.events.slice(0, 4), firstFrames: rs.firstFrames });
+    // the controls bar (<video-hfp controls>): present, its buttons drive the element, the scrubber seeks on release, a frame step, controlslist
+    const ct = r.controls || {};
+    const ctOk = ct.present && ct.playLabelPaused === 'Play' && ct.playsOnClick && ct.playLabelPlaying === 'Pause' && ct.pausesOnClick && ct.scrubSeeks === 42 && ct.scrubMax === r.frameCount - 1 && ct.mutedAfter === false && ct.nextFrame === 43 && ct.noFullscreen;
+    if (!ctOk) fail('controls', ct); else pass('controls', { scrubSeeks: ct.scrubSeeks, nextFrame: ct.nextFrame, hiddenWhilePlaying: ct.hiddenWhilePlaying, timeLabel: ct.timeLabel });
   } catch (e) { run.ok = verdict.ok = false; run.error = e.message; }
   run.consoleErrors = consoleErrors.splice(0);
   verdict.runs.push(run);

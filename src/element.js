@@ -20,7 +20,42 @@ import { loadClip } from './clip.js';
 import { buildBridge } from './bridge.js';
 import { storedProfile } from './probe.js';
 
-const TEMPLATE = '<style>:host{display:inline-block;position:relative;overflow:hidden;background:#000;width:var(--video-hfp-width,300px);height:var(--video-hfp-height,auto);aspect-ratio:var(--video-hfp-aspect,2/1)}:host([hidden]){display:none}canvas{display:block;width:100%;height:100%;object-fit:inherit}</style><canvas width="300" height="150"></canvas>';
+const ICON = {
+  play: '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>',
+  pause: '<svg viewBox="0 0 24 24"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>',
+  prev: '<svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>',
+  next: '<svg viewBox="0 0 24 24"><path d="M16 6h2v12h-2zM6 18l8.5-6L6 6z"/></svg>',
+  sound: '<svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9zm13.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4z"/></svg>',
+  muted: '<svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9zm13 1.5-1.5-1.5-2 2-2-2L9 10.5l2 2-2 2L10.5 16l2-2 2 2L16 14.5l-2-2z"/></svg>',
+  fullscreen: '<svg viewBox="0 0 24 24"><path d="M4 4h6v2H6v4H4zm10 0h6v6h-2V6h-4zM4 14h2v4h4v2H4zm14 0h2v6h-6v-2h4z"/></svg>',
+  exitFullscreen: '<svg viewBox="0 0 24 24"><path d="M8 4h2v6H4V8h4zm6 0h2v4h4v2h-6zM4 14h6v6H8v-4H4zm10 0h6v2h-4v4h-2z"/></svg>',
+};
+const TEMPLATE = `<style>
+:host{display:inline-block;position:relative;overflow:hidden;background:#000;width:var(--video-hfp-width,300px);height:var(--video-hfp-height,auto);aspect-ratio:var(--video-hfp-aspect,2/1);outline:none}
+:host([hidden]){display:none}
+canvas{display:block;width:100%;height:100%;object-fit:inherit}
+.hfp-controls{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;gap:2px;padding:6px 8px;box-sizing:border-box;background:linear-gradient(to top,rgba(0,0,0,.75),rgba(0,0,0,0));color:#fff;font:13px/1 system-ui,sans-serif;transition:opacity .25s;user-select:none;-webkit-user-select:none}
+.hfp-controls[hidden]{display:none}
+.hfp-controls.hfp-away{opacity:0;pointer-events:none}
+.hfp-controls button{appearance:none;border:0;background:transparent;color:inherit;min-width:44px;min-height:44px;padding:0;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;border-radius:8px;flex:none}
+.hfp-controls button:hover,.hfp-controls button:focus-visible{background:rgba(255,255,255,.15);outline:none}
+.hfp-controls svg{width:22px;height:22px;fill:currentColor}
+.hfp-time{flex:none;padding:0 6px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.hfp-scrub{flex:1;min-width:40px;height:44px;margin:0;accent-color:var(--mt-accent,#4ea1ff);cursor:pointer}
+.hfp-controls[data-nofullscreen] .hfp-fs{display:none}
+@media (max-width:420px){.hfp-step{display:none}}
+</style><canvas width="300" height="150"></canvas>
+<div class="hfp-controls" part="controls" hidden>
+  <button class="hfp-play" aria-label="Play">${ICON.play}</button>
+  <button class="hfp-step hfp-prev" aria-label="Previous frame">${ICON.prev}</button>
+  <button class="hfp-step hfp-next" aria-label="Next frame">${ICON.next}</button>
+  <span class="hfp-time"><span class="hfp-cur">0:00</span> / <span class="hfp-dur">0:00</span></span>
+  <input class="hfp-scrub" type="range" min="0" max="0" step="1" value="0" aria-label="Seek">
+  <button class="hfp-mute" aria-label="Mute">${ICON.sound}</button>
+  <button class="hfp-fs" aria-label="Full screen">${ICON.fullscreen}</button>
+</div>`;
+const HIDE_AFTER_MS = 2500;
+const fmtTime = (t) => { if (!Number.isFinite(t) || t < 0) t = 0; const s = Math.floor(t), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60; const p = (n) => String(n).padStart(2, '0'); return h ? `${h}:${p(m)}:${p(sec)}` : `${m}:${p(sec)}`; };
 const UNSUPPORTED = { playbackRate: 1, defaultPlaybackRate: 1, preservesPitch: true, srcObject: null, mediaKeys: null, disablePictureInPicture: false, disableRemotePlayback: false };
 const notSupported = (what) => new DOMException(`${what} is not supported by <video-hfp>`, 'NotSupportedError');
 const TIMEUPDATE_MS = 250;
@@ -40,7 +75,7 @@ export class HFPClip extends HTMLElementBase {
 }
 
 export class VideoHFP extends HTMLElementBase {
-  static get observedAttributes() { return ['src', 'width', 'height', 'poster', 'muted', 'loop', 'preload', 'loop-start', 'loop-end']; }
+  static get observedAttributes() { return ['src', 'width', 'height', 'poster', 'muted', 'loop', 'preload', 'loop-start', 'loop-end', 'controls', 'controlslist']; }
   static HAVE_NOTHING = 0; static HAVE_METADATA = 1; static HAVE_CURRENT_DATA = 2; static HAVE_FUTURE_DATA = 3; static HAVE_ENOUGH_DATA = 4;
   static NETWORK_EMPTY = 0; static NETWORK_IDLE = 1; static NETWORK_LOADING = 2; static NETWORK_NO_SOURCE = 3;
 
@@ -65,6 +100,8 @@ export class VideoHFP extends HTMLElementBase {
     this._dataFiredFor = null;      // the clip loadeddata / canplay were fired for
     this._observer = null;
     this._connected = false;
+    this._controls = { bar: this._root.querySelector('.hfp-controls'), hideTimer: 0, scrubbing: false, resumeAfterScrub: false };
+    this._wireControls();
   }
 
   // ---- lifecycle ----------------------------------------------------------------------------
@@ -97,6 +134,7 @@ export class VideoHFP extends HTMLElementBase {
     this._observer ??= new MutationObserver(() => this._scanChildren());
     this._observer.observe(this, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'name', 'prepare-at'] });
     this._scanChildren();
+    this._syncControls();
     if (this.hasAttribute('src') && !this._mainPromise) this._load();
   }
   disconnectedCallback() { this._connected = false; this._observer?.disconnect(); }
@@ -108,6 +146,7 @@ export class VideoHFP extends HTMLElementBase {
       case 'poster': this._applyPoster(); break;
       case 'muted': if (this._muted == null && this._engine) { this._applyVolume(); this._fire('volumechange'); } break;   // the attribute parsed with the element is the default, not a change
       case 'preload': if (val === 'auto' && this._main && this._readyState < 2) this._warm(this._main); break;
+      case 'controls': case 'controlslist': this._syncControls(); break;
       case 'loop': case 'loop-start': case 'loop-end': break;   // read at the next play()
     }
   }
@@ -134,8 +173,10 @@ export class VideoHFP extends HTMLElementBase {
   set playsInline(v) { this.toggleAttribute('playsinline', !!v); }
   get crossOrigin() { return this.getAttribute('crossorigin'); }
   set crossOrigin(v) { if (v == null) this.removeAttribute('crossorigin'); else this.setAttribute('crossorigin', v); }
+  get controlsList() { return (this.getAttribute('controlslist') || '').split(/\s+/).filter(Boolean); }
+  set controlsList(v) { this.setAttribute('controlslist', Array.isArray(v) ? v.join(' ') : String(v)); }
   get controls() { return this.hasAttribute('controls'); }
-  set controls(v) { this.toggleAttribute('controls', !!v); }   // accepted, not drawn: a bar of our own is a later item
+  set controls(v) { this.toggleAttribute('controls', !!v); }
   /** Muted: the property, else the attribute (the attribute is the default, as on <video>). */
   get muted() { return this._muted ?? this.hasAttribute('muted'); }
   set muted(v) { this._muted = !!v; this._applyVolume(); this._fire('volumechange'); }
@@ -220,11 +261,12 @@ export class VideoHFP extends HTMLElementBase {
    * gesture yet, as <video> does (and fires `blocked`); a silent or muted clip plays on the wall clock.
    */
   async play(range) {
+    const engine = this.engine;
+    const resumed = engine.resume();   // first, synchronously: an AudioContext may only start inside the tap that called us
     const explicit = !!(range && typeof range === 'object');
     let clip = explicit && range.clip != null ? this._clipOf(range.clip) : (this._pos?.clip ?? null);
     if (!clip) clip = await this._ensureMain();
-    const engine = this.engine;
-    await engine.resume();
+    await resumed;
     if (clip.audio && !this.muted && engine.audioContext.state !== 'running') {
       this._fire('blocked', { clip });
       throw new DOMException("play() failed because the user didn't interact with the document first.", 'NotAllowedError');
@@ -292,6 +334,89 @@ export class VideoHFP extends HTMLElementBase {
   /** One callback per presented frame; metadata carries the frame number and clip. One-shot, like the <video> API. */
   requestVideoFrameCallback(cb) { const id = ++this._rvfcId; this._rvfc.set(id, cb); return id; }
   cancelVideoFrameCallback(id) { this._rvfc.delete(id); }
+
+  // ---- the controls bar ---------------------------------------------------------------------------
+  /** <video-hfp controls>: a bar in the shadow root — play/pause, a frame at a time, the time, a scrubber in frames, mute, full screen; it hides while playing and comes back on a touch, a move or a key. */
+  _wireControls() {
+    const c = this._controls, q = (sel) => c.bar.querySelector(sel);
+    c.play = q('.hfp-play'); c.prev = q('.hfp-prev'); c.next = q('.hfp-next'); c.cur = q('.hfp-cur'); c.dur = q('.hfp-dur'); c.scrub = q('.hfp-scrub'); c.mute = q('.hfp-mute'); c.fs = q('.hfp-fs');
+    const stop = (e) => { e.stopPropagation(); };
+    c.play.addEventListener('click', (e) => { stop(e); if (this._paused) this.play().catch(() => {}); else this.pause(); });
+    c.prev.addEventListener('click', (e) => { stop(e); this._stepFrame(-1); });
+    c.next.addEventListener('click', (e) => { stop(e); this._stepFrame(1); });
+    c.mute.addEventListener('click', (e) => { stop(e); this.muted = !this.muted; });
+    c.fs.addEventListener('click', (e) => { stop(e); this._toggleFullscreen(); });
+    // scrubbing: the label follows the thumb; the seek lands on release (each seek while paused decodes the frame)
+    c.scrub.addEventListener('pointerdown', () => { c.scrubbing = true; c.resumeAfterScrub = !this._paused; if (!this._paused) this.pause(); });
+    c.scrub.addEventListener('input', () => { const clip = this._currentClip(); if (clip) c.cur.textContent = fmtTime(clip.frameTime(Number(c.scrub.value))); });
+    const release = () => { if (!c.scrubbing) return; c.scrubbing = false; this.seek(Number(c.scrub.value)); if (c.resumeAfterScrub) { c.resumeAfterScrub = false; this.play().catch(() => {}); } };
+    c.scrub.addEventListener('change', release); c.scrub.addEventListener('pointerup', release); c.scrub.addEventListener('pointercancel', release);
+    c.bar.addEventListener('click', stop); c.bar.addEventListener('pointerdown', stop);
+    // the bar follows the element's own events
+    this.addEventListener('play', () => this._controlsState()); this.addEventListener('pause', () => this._controlsState()); this.addEventListener('ended', () => this._controlsState());
+    this.addEventListener('volumechange', () => this._controlsState());
+    this.addEventListener('loadedmetadata', () => this._controlsMeta()); this.addEventListener('durationchange', () => this._controlsMeta());
+    this.addEventListener('timeupdate', () => this._controlsTime()); this.addEventListener('seeked', () => this._controlsTime());
+    // presence: a move, a touch or a key brings the bar back; it leaves on its own while playing
+    const wake = () => this._showControls();
+    this.addEventListener('pointermove', wake); this.addEventListener('pointerdown', wake); this.addEventListener('focusin', wake);
+    this.addEventListener('pointerleave', () => { if (!this._paused) this._hideControlsSoon(0); });
+    this.addEventListener('keydown', (e) => this._controlsKey(e));
+    const onFs = () => this._controlsState();
+    document.addEventListener('fullscreenchange', onFs); document.addEventListener('webkitfullscreenchange', onFs);
+  }
+  _syncControls() {
+    const c = this._controls, on = this.hasAttribute('controls');
+    c.bar.hidden = !on;
+    if (this.controlsList.includes('nofullscreen')) c.bar.setAttribute('data-nofullscreen', ''); else c.bar.removeAttribute('data-nofullscreen');
+    if (on && !this.hasAttribute('tabindex')) this.setAttribute('tabindex', '0');
+    this._controlsMeta(); this._controlsState(); this._controlsTime(); this._showControls();
+  }
+  _controlsMeta() {
+    const c = this._controls, clip = this._currentClip();
+    c.scrub.max = clip ? String(Math.max(0, clip.frameCount - 1)) : '0';
+    c.dur.textContent = fmtTime(clip ? clip.duration : 0);
+  }
+  _controlsState() {
+    const c = this._controls;
+    c.play.innerHTML = this._paused ? ICON.play : ICON.pause; c.play.setAttribute('aria-label', this._paused ? 'Play' : 'Pause');
+    c.mute.innerHTML = this.muted ? ICON.muted : ICON.sound; c.mute.setAttribute('aria-label', this.muted ? 'Unmute' : 'Mute');
+    const fs = (document.fullscreenElement || document.webkitFullscreenElement) === this;
+    c.fs.innerHTML = fs ? ICON.exitFullscreen : ICON.fullscreen; c.fs.setAttribute('aria-label', fs ? 'Exit full screen' : 'Full screen');
+    if (this._paused) this._showControls(); else this._hideControlsSoon();
+  }
+  _controlsTime() {
+    const c = this._controls; if (c.scrubbing) return;
+    const f = this.currentFrame, clip = this._currentClip();
+    if (f >= 0) c.scrub.value = String(f);
+    c.cur.textContent = fmtTime(clip && f >= 0 ? clip.frameTime(f) : 0);
+    c.cur.title = f >= 0 ? `frame ${f}` : '';
+  }
+  _showControls() { const c = this._controls; c.bar.classList.remove('hfp-away'); if (!this._paused) this._hideControlsSoon(); }
+  _hideControlsSoon(ms = HIDE_AFTER_MS) { const c = this._controls; clearTimeout(c.hideTimer); c.hideTimer = setTimeout(() => { if (!this._paused && !c.scrubbing) c.bar.classList.add('hfp-away'); }, ms); }
+  _stepFrame(dir) { const clip = this._currentClip(); if (!clip) return; if (!this._paused) this.pause(); this.seek(Math.max(0, Math.min(clip.frameCount - 1, this.currentFrame + dir))); }
+  _toggleFullscreen() {
+    if ((document.fullscreenElement || document.webkitFullscreenElement) === this) { (document.exitFullscreen || document.webkitExitFullscreen)?.call(document); return; }
+    const req = this.requestFullscreen || this.webkitRequestFullscreen;
+    if (req) { const p = req.call(this); if (p && p.catch) p.catch(() => {}); }
+  }
+  /** Keyboard, when the element has focus (controls give it a tabindex): space/k play-pause, arrows 5 s (shift: one frame), j/l 10 s, m mute, f full screen. */
+  _controlsKey(e) {
+    if (!this.hasAttribute('controls') || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
+    const clip = this._currentClip(); if (!clip) return;
+    const by = (sec) => this.seek(clip.frameAt(this.currentTime + sec));
+    switch (e.key) {
+      case ' ': case 'k': if (this._paused) this.play().catch(() => {}); else this.pause(); break;
+      case 'ArrowRight': if (e.shiftKey) this._stepFrame(1); else by(5); break;
+      case 'ArrowLeft': if (e.shiftKey) this._stepFrame(-1); else by(-5); break;
+      case 'l': by(10); break;
+      case 'j': by(-10); break;
+      case 'm': this.muted = !this.muted; break;
+      case 'f': this._toggleFullscreen(); break;
+      default: return;
+    }
+    e.preventDefault(); this._showControls();
+  }
 
   // ---- internals ------------------------------------------------------------------------------
   _fire(type, detail) { const ev = new Event(type, { bubbles: false }); if (detail) Object.assign(ev, detail); this.dispatchEvent(ev); }

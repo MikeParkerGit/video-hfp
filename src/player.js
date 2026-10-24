@@ -467,10 +467,12 @@ export class Player extends EventTarget {
   _buildLoopBridge(clip, from, len, link) {
     const count = Math.min(this.bridgeFramesFor(clip, from), len);
     buildBridge(clip, from, { count }).then((bridge) => {
+      if (link.dead) { bridge.close(); return; }
       const seg = [this._segment, this._next].find((x) => x && x.link === link);
-      if (!seg || link.dead || seg.loopBridge) { bridge.close(); return; }
+      if (!seg) { link.bridge = bridge; return; }   // built before the segment's cold start anchored it: _anchor picks it up
+      if (seg.loopBridge) { bridge.close(); return; }
       this._attachLoopBridge(seg, bridge);
-    }, (e) => { const seg = [this._segment, this._next].find((x) => x && x.link === link); if (seg && !link.dead) this._emitError(e, clip, true); });   // the loop runs on its decoder alone; said
+    }, (e) => { if (!link.dead) this._emitError(e, clip, true); });   // the loop runs on its decoder alone; said
   }
   /**
    * From the next wrap on, the loop's first frames come from the bridge; the decoder, told to resume output
@@ -505,11 +507,12 @@ export class Player extends EventTarget {
     if (this._next) this._dispose(this._next, tStart);    // replaced before it ever started
     if (this._segment) this._stopAudioAt(this._segment, tStart);
     this._next = seg;
+    if (seg.link.bridge) { const b = seg.link.bridge; seg.link.bridge = null; this._attachLoopBridge(seg, b); }   // a wrap bridge that finished first
     if (!this._raf) this._raf = requestAnimationFrame(this._tick);
   }
 
   _stopAudioAt(seg, t) { if (!seg.audio || seg.audioStopped) return; seg.audioStopped = true; seg.audioStopAt = t; seg.audio.stopAt(t); }
-  _dispose(seg, t) { this._stopAudioAt(seg, t); this._closeSource(seg.source); this._closeSource(seg.standby); seg.loopBridge?.close(); seg.loopBridge = null; seg.loopBridgeSeed?.close(); seg.loopBridgeSeed = null; seg.pendingBridge?.bridge.close(); seg.pendingBridge = null; seg.link.dead = true; seg.clip.pinRange(null); this._account(); }
+  _dispose(seg, t) { this._stopAudioAt(seg, t); this._closeSource(seg.source); this._closeSource(seg.standby); seg.loopBridge?.close(); seg.loopBridge = null; seg.loopBridgeSeed?.close(); seg.loopBridgeSeed = null; seg.pendingBridge?.bridge.close(); seg.pendingBridge = null; seg.link.bridge?.close(); seg.link.bridge = null; seg.link.dead = true; seg.clip.pinRange(null); this._account(); }
 
   /** Presentation index for presentation number p of a segment. */
   _indexForP(seg, p) { return seg.loop ? seg.from + ((p % seg.length) + seg.length) % seg.length : Math.min(seg.from + Math.max(0, p), seg.to - 1); }

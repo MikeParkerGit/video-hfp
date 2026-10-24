@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased (0.2.0-beta.2)
+- **Controls.** `<video-hfp controls>` draws its own bar in the shadow root — play/pause, a frame step either way, the time, a scrubber in frames that seeks on release, mute, full screen — hiding while playing and returning on a touch, a move or a key (space/k, arrows 5 s, shift+arrow one frame, j/l 10 s, m, f); `controlslist="nofullscreen"`. `play()` now resumes the AudioContext first, synchronously, so a tap's activation is not lost while the clip is still opening (iOS).
 - **Rotation.** A phone's portrait recording is stored sideways with a 90° display matrix, which `<video>` applies and the canvas did not: the MP4 demuxer reads the track header's matrix (and the WebM one a Projection roll), the clip carries `rotation` (degrees clockwise) and the upright `displayWidth`/`displayHeight`, the engine turns the frame as it draws, and the element's `videoWidth`/`videoHeight` and intrinsic size are the upright ones. The test clips gain `A-rot.mp4` (`ffmpeg -display_rotation -90`, a metadata-only copy); the smoke test proves 90° and 720×1280, the playback suite draws it upright.
 
 ## 0.2.0-beta.1 — 2026-10-24 — video-hfp: the element, the bridge (the first published release, as a beta: `npm install video-hfp@beta`)

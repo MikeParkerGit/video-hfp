@@ -28,6 +28,22 @@ probe.afterSeekPaused = { events: events.slice(), currentFrame: v.currentFrame, 
 events.length = 0; const mark = trace.length; await v.play(); await new Promise((r) => setTimeout(r, 600));
 probe.afterResume = { events: events.slice(), paused: v.paused, firstFrames: trace.slice(mark, mark + 4).map((e) => e[1]) };
 v.pause();
+// the controls bar: on with the attribute, its buttons drive the element, the scrubber seeks on release
+v.setAttribute('controls', '');
+await new Promise((r) => setTimeout(r, 100));
+const bar = v.shadowRoot.querySelector('.hfp-controls');
+const ctl = { present: !!bar && !bar.hidden, playLabelPaused: bar?.querySelector('.hfp-play')?.getAttribute('aria-label') };
+bar.querySelector('.hfp-play').click(); await new Promise((r) => setTimeout(r, 700));
+ctl.playsOnClick = !v.paused; ctl.playLabelPlaying = bar.querySelector('.hfp-play').getAttribute('aria-label'); ctl.hiddenWhilePlaying = bar.classList.contains('hfp-away');
+bar.querySelector('.hfp-play').click(); await new Promise((r) => setTimeout(r, 300));
+ctl.pausesOnClick = v.paused;
+const sc = bar.querySelector('.hfp-scrub'); sc.value = '42'; sc.dispatchEvent(new Event('pointerdown')); sc.dispatchEvent(new Event('input')); sc.dispatchEvent(new Event('change'));
+await new Promise((r) => setTimeout(r, 800));
+ctl.scrubSeeks = v.currentFrame; ctl.scrubMax = Number(sc.max); ctl.timeLabel = bar.querySelector('.hfp-cur').textContent;
+bar.querySelector('.hfp-mute').click(); ctl.muteToggles = v.muted === false || v.muted === true; ctl.mutedAfter = v.muted; bar.querySelector('.hfp-mute').click();
+bar.querySelector('.hfp-next').click(); await new Promise((r) => setTimeout(r, 500)); ctl.nextFrame = v.currentFrame;
+v.setAttribute('controlslist', 'nofullscreen'); ctl.noFullscreen = getComputedStyle(bar.querySelector('.hfp-fs')).display === 'none';
+probe.controls = ctl;
 window.__probe = probe;
 document.getElementById('out').textContent = JSON.stringify(probe, null, 1);
 </script>
