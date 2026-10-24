@@ -1,0 +1,29 @@
+# Publish to npm from a tag push — no login on any machine. Needs the repository secret NPM_TOKEN
+# (a granular access token from npmjs.com with publish rights on video-hfp). A prerelease version
+# (0.2.0-beta.1) goes out under the `beta` dist-tag, a plain one under `latest`. `--provenance`
+# stamps the tarball with this commit and run, which npm shows as a verified link to the repo.
+name: publish
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: the tag must be the package's version
+        run: |
+          v=$(node -p "require('./package.json').version")
+          [ "v$v" = "${GITHUB_REF_NAME}" ] || { echo "tag ${GITHUB_REF_NAME} is not v$v"; exit 1; }
+          echo "TAG=$([[ "$v" == *-* ]] && echo beta || echo latest)" >> "$GITHUB_ENV"
+      - run: npm test
+      - run: npm publish --provenance --access public --tag "$TAG"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
