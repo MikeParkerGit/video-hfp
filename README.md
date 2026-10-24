@@ -327,6 +327,11 @@ every test clip; the bridge formula; the budget model; the plan. GitHub CI (Ubun
 Linux Chromium, which has no H.264 decoder): `npm test` and the VP9/Opus and Worker pairings
 pass; the H.264 pairings are reported as skipped there.
 
+## Contributing
+
+Not yet: the project is in beta and not taking outside changes (see CONTRIBUTING.md). Bug
+reports and device results as issues are welcome.
+
 ## Where to take it next
 
 - A controls bar of our own (frame stepping, the loop range, the prepared targets).
