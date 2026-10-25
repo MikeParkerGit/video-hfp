@@ -239,8 +239,9 @@ async function runCompat() {
     const skipTo = 42 + Math.round(10 * r.frameRate);   // +10 s from frame 42
     const ctOk = ct.present && ct.playLabelPaused === 'Play' && ct.playsOnClick && ct.playLabelPlaying === 'Pause' && ct.pausesOnClick && ct.scrubSeeks === 42 && ct.scrubMax === r.frameCount - 1 && ct.mutedAfter === false && ct.noFullscreen
       && ct.defaultSet?.skip && !ct.defaultSet?.step && ct.fwd10 === skipTo && ct.back10 === 42
-      && ct.framestepSet?.skip && ct.framestepSet?.step && ct.nextFrame === 43 && !ct.noskipSet?.skip && ct.noskipSet?.step;
-    if (!ctOk) fail('controls', { ...ct, skipTo }); else pass('controls', { scrubSeeks: ct.scrubSeeks, fwd10: ct.fwd10, back10: ct.back10, nextFrame: ct.nextFrame, subsets: 'default skip / framestep / noskip', hiddenWhilePlaying: ct.hiddenWhilePlaying, timeLabel: ct.timeLabel });
+      && ct.framestepSet?.skip && ct.framestepSet?.step && ct.nextFrame === 43 && !ct.noskipSet?.skip && ct.noskipSet?.step
+      && ct.touch?.shownByTap && ct.touch?.afterTouchLift && ct.touch?.afterSkipTap && ct.touch?.hidesOnItsOwn && ct.touch?.mouseMoveShows && ct.touch?.mouseLeaveHides;
+    if (!ctOk) fail('controls', { ...ct, skipTo }); else pass('controls', { scrubSeeks: ct.scrubSeeks, fwd10: ct.fwd10, back10: ct.back10, nextFrame: ct.nextFrame, subsets: 'default skip / framestep / noskip', touch: ct.touch, hiddenWhilePlaying: ct.hiddenWhilePlaying, timeLabel: ct.timeLabel });
     // removal: paused and released (decoders, bridges, AudioContext) as a <video> pauses; a move is not a removal; back in, it plays on a fresh engine; pause() aborts a pending play()
     const rm = r.removal || {};
     const rmOk = rm.moveKeepsPlaying && rm.pausedOnRemoval && rm.framesAfterRemoval === 0 && rm.contextState === 'closed' && rm.replays && rm.freshEngine && rm.pauseAbortsPlay === 'AbortError' && rm.pausedAfterAbort && rm.framesAfterAbort === 0;

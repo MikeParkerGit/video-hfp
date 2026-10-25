@@ -380,20 +380,22 @@ export class VideoHFP extends HTMLElementBase {
   _wireControls() {
     const c = this._controls, q = (sel) => c.bar.querySelector(sel);
     c.play = q('.hfp-play'); c.prev = q('.hfp-prev'); c.next = q('.hfp-next'); c.back = q('.hfp-back'); c.fwd = q('.hfp-fwd'); c.cur = q('.hfp-cur'); c.dur = q('.hfp-dur'); c.scrub = q('.hfp-scrub'); c.mute = q('.hfp-mute'); c.fs = q('.hfp-fs');
-    const stop = (e) => { e.stopPropagation(); };
-    c.play.addEventListener('click', (e) => { stop(e); if (this._paused) this.play().catch(() => {}); else this.pause(); });
-    c.prev.addEventListener('click', (e) => { stop(e); this._stepFrame(-1); });
-    c.next.addEventListener('click', (e) => { stop(e); this._stepFrame(1); });
-    c.back.addEventListener('click', (e) => { stop(e); this._skip(-SKIP_SECONDS); });
-    c.fwd.addEventListener('click', (e) => { stop(e); this._skip(SKIP_SECONDS); });
-    c.mute.addEventListener('click', (e) => { stop(e); this.muted = !this.muted; });
-    c.fs.addEventListener('click', (e) => { stop(e); this._toggleFullscreen(); });
+    // the buttons' clicks bubble to the bar, which keeps them inside the element (see `inside` below)
+    c.play.addEventListener('click', () => { if (this._paused) this.play().catch(() => {}); else this.pause(); });
+    c.prev.addEventListener('click', () => this._stepFrame(-1));
+    c.next.addEventListener('click', () => this._stepFrame(1));
+    c.back.addEventListener('click', () => this._skip(-SKIP_SECONDS));
+    c.fwd.addEventListener('click', () => this._skip(SKIP_SECONDS));
+    c.mute.addEventListener('click', () => { this.muted = !this.muted; });
+    c.fs.addEventListener('click', () => this._toggleFullscreen());
     // scrubbing: the label follows the thumb; the seek lands on release (each seek while paused decodes the frame)
     c.scrub.addEventListener('pointerdown', () => { c.scrubbing = true; c.resumeAfterScrub = !this._paused; if (!this._paused) this.pause(); });
     c.scrub.addEventListener('input', () => { const clip = this._currentClip(); if (clip) c.cur.textContent = fmtTime(clip.frameTime(Number(c.scrub.value))); });
     const release = () => { if (!c.scrubbing) return; c.scrubbing = false; this.seek(Number(c.scrub.value)); if (c.resumeAfterScrub) { c.resumeAfterScrub = false; this.play().catch(() => {}); } };
     c.scrub.addEventListener('change', release); c.scrub.addEventListener('pointerup', release); c.scrub.addEventListener('pointercancel', release);
-    c.bar.addEventListener('click', stop); c.bar.addEventListener('pointerdown', stop);
+    // a touch or a click on the bar is activity: it restarts the hide timer, and it stays inside the element (a page's own tap handlers never see it)
+    const inside = (e) => { e.stopPropagation(); this._showControls(); };
+    c.bar.addEventListener('click', inside); c.bar.addEventListener('pointerdown', inside);
     // the bar follows the element's own events
     this.addEventListener('play', () => this._controlsState()); this.addEventListener('pause', () => this._controlsState()); this.addEventListener('ended', () => this._controlsState());
     this.addEventListener('volumechange', () => this._controlsState());
@@ -402,7 +404,8 @@ export class VideoHFP extends HTMLElementBase {
     // presence: a move, a touch or a key brings the bar back; it leaves on its own while playing
     const wake = () => this._showControls();
     this.addEventListener('pointermove', wake); this.addEventListener('pointerdown', wake); this.addEventListener('focusin', wake);
-    this.addEventListener('pointerleave', () => { if (!this._paused) this._hideControlsSoon(0); });
+    // a mouse leaving hides the bar at once; a finger lifting is not leaving — touch fires pointerleave after every tap
+    this.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse' && !this._paused) this._hideControlsSoon(0); });
     this.addEventListener('keydown', (e) => this._controlsKey(e));
     const onFs = () => this._controlsState();
     document.addEventListener('fullscreenchange', onFs); document.addEventListener('webkitfullscreenchange', onFs);

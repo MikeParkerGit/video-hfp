@@ -55,6 +55,23 @@ v.setAttribute('controlslist', 'framestep'); ctl.framestepSet = { skip: shown('.
 bar.querySelector('.hfp-next').click(); await sleep(500); ctl.nextFrame = v.currentFrame;
 v.setAttribute('controlslist', 'noskip framestep'); ctl.noskipSet = { skip: shown('.hfp-back') || shown('.hfp-fwd'), step: shown('.hfp-prev') };
 v.setAttribute('controlslist', 'nofullscreen'); ctl.noFullscreen = !shown('.hfp-fs');
+// touch, while playing: a tap brings the bar back and lifting the finger (pointerleave) must not hide it; a tap on a
+// control restarts the hide timer; the bar still leaves on its own; a mouse leaving hides it at once
+await v.play(); await sleep(300);
+const away = () => bar.classList.contains('hfp-away'), tap = {};
+v.dispatchEvent(new PointerEvent('pointerdown', { pointerType: 'touch', bubbles: true })); tap.shownByTap = !away();
+v.dispatchEvent(new PointerEvent('pointerleave', { pointerType: 'touch' }));
+await sleep(100); tap.afterTouchLift = !away();
+await sleep(1800);   // most of the 2.5 s the bar waits
+const fwdBtn = bar.querySelector('.hfp-fwd');
+fwdBtn.dispatchEvent(new PointerEvent('pointerdown', { pointerType: 'touch', bubbles: true })); fwdBtn.click();
+v.dispatchEvent(new PointerEvent('pointerleave', { pointerType: 'touch' }));
+await sleep(1200); tap.afterSkipTap = !away();   // past the first timer: the tap on the skip restarted it
+await sleep(2000); tap.hidesOnItsOwn = away();
+v.dispatchEvent(new PointerEvent('pointermove', { pointerType: 'mouse', bubbles: true })); tap.mouseMoveShows = !away();
+v.dispatchEvent(new PointerEvent('pointerleave', { pointerType: 'mouse' })); await sleep(100); tap.mouseLeaveHides = away();
+v.pause();
+ctl.touch = tap;
 probe.controls = ctl;
 // removal: like a <video>, the element pauses when it leaves the document, and it releases its engine; a move is not a removal
 const rm = {};

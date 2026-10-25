@@ -1,6 +1,6 @@
 {
   "name": "video-hfp",
-  "version": "0.2.0-beta.3",
+  "version": "0.2.0-beta.4",
   "description": "video-hfp — high frame precision video for the web: a <video>-shaped element on WebCodecs with frame-exact verbs — seamless loops, frame-exact cuts, prepared targets that land on the next display frame — on ordinary files",
   "author": "Michael Parker",
   "license": "MIT",
