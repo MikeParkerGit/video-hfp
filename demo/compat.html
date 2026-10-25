@@ -7,6 +7,7 @@
 // listeners first, then the definition: the upgrade fires loadstart at once
 const v = document.getElementById('v');
 const events = window.__events = [], trace = window.__trace = [];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 for (const t of ['loadstart', 'durationchange', 'loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough', 'play', 'playing', 'waiting', 'pause', 'ended', 'seeking', 'seeked', 'volumechange', 'emptied', 'error', 'blocked', 'loop', 'switch'])
   v.addEventListener(t, () => events.push(t));
 let timeupdates = 0; v.addEventListener('timeupdate', () => timeupdates++);
@@ -45,9 +46,43 @@ const sc = bar.querySelector('.hfp-scrub'); sc.value = '42'; sc.dispatchEvent(ne
 await new Promise((r) => setTimeout(r, 800));
 ctl.scrubSeeks = v.currentFrame; ctl.scrubMax = Number(sc.max); ctl.timeLabel = bar.querySelector('.hfp-cur').textContent;
 bar.querySelector('.hfp-mute').click(); ctl.muteToggles = v.muted === false || v.muted === true; ctl.mutedAfter = v.muted; bar.querySelector('.hfp-mute').click();
-bar.querySelector('.hfp-next').click(); await new Promise((r) => setTimeout(r, 500)); ctl.nextFrame = v.currentFrame;
-v.setAttribute('controlslist', 'nofullscreen'); ctl.noFullscreen = getComputedStyle(bar.querySelector('.hfp-fs')).display === 'none';
+// one set of buttons, the page picks the subset: the 10 s skips by default, the single-frame buttons with controlslist="framestep"
+const shown = (sel) => getComputedStyle(bar.querySelector(sel)).display !== 'none';
+ctl.defaultSet = { skip: shown('.hfp-back') && shown('.hfp-fwd'), step: shown('.hfp-prev') || shown('.hfp-next') };
+bar.querySelector('.hfp-fwd').click(); await sleep(600); ctl.fwd10 = v.currentFrame;
+bar.querySelector('.hfp-back').click(); await sleep(600); ctl.back10 = v.currentFrame;
+v.setAttribute('controlslist', 'framestep'); ctl.framestepSet = { skip: shown('.hfp-back') && shown('.hfp-fwd'), step: shown('.hfp-prev') && shown('.hfp-next') };
+bar.querySelector('.hfp-next').click(); await sleep(500); ctl.nextFrame = v.currentFrame;
+v.setAttribute('controlslist', 'noskip framestep'); ctl.noskipSet = { skip: shown('.hfp-back') || shown('.hfp-fwd'), step: shown('.hfp-prev') };
+v.setAttribute('controlslist', 'nofullscreen'); ctl.noFullscreen = !shown('.hfp-fs');
 probe.controls = ctl;
+// removal: like a <video>, the element pauses when it leaves the document, and it releases its engine; a move is not a removal
+const rm = {};
+await v.play(); await sleep(600);
+let at = trace.length;
+document.body.appendChild(v);   // a move: out and straight back in
+await sleep(500);
+rm.moveKeepsPlaying = !v.paused && trace.length > at;
+const ctx = v.engine.audioContext;
+v.remove();
+await sleep(50);
+rm.pausedOnRemoval = v.paused;
+at = trace.length;
+await sleep(500);
+rm.framesAfterRemoval = trace.length - at;
+rm.contextState = ctx.state;   // closed once the engine is released
+document.body.prepend(v);
+at = trace.length;
+await v.play(); await sleep(800);
+rm.replays = !v.paused && trace.length - at > 5;
+rm.freshEngine = v.engine.audioContext !== ctx;
+// a pause() while play() is still opening wins: that play() rejects with AbortError and nothing starts
+v.pause(); at = trace.length;
+const pending = v.play(); v.pause();
+rm.pauseAbortsPlay = await pending.then(() => 'resolved', (e) => e.name);
+await sleep(400);
+rm.pausedAfterAbort = v.paused; rm.framesAfterAbort = trace.length - at;
+probe.removal = rm;
 window.__probe = probe;
 document.getElementById('out').textContent = JSON.stringify(probe, null, 1);
 </script>

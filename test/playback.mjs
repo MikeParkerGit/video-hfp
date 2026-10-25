@@ -216,7 +216,7 @@ async function runCompat() {
   try {
     const src = support?.h264 ? 'A.mp4' : 'A-vp9.webm';
     await send('Page.navigate', { url: `http://localhost:${port}/demo/compat.html?src=${src}` });
-    const r = await waitProbe();
+    const r = await waitProbe(45000);   // ~15 s of scripted steps: the loop, seek/resume, the controls, removal
     const order = ['loadstart', 'loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough', 'play', 'playing'];
     const idx = order.map((e) => r.events.indexOf(e));
     const inOrder = idx.every((i, k) => i >= 0 && (k === 0 || i > idx[k - 1]));
@@ -236,8 +236,15 @@ async function runCompat() {
     if (rs.paused || !rs.events.includes('play') || !rs.events.includes('playing') || rs.firstFrames[0] !== 10) fail('resume', rs); else pass('resume', { events: rs.events.slice(0, 4), firstFrames: rs.firstFrames });
     // the controls bar (<video-hfp controls>): present, its buttons drive the element, the scrubber seeks on release, a frame step, controlslist
     const ct = r.controls || {};
-    const ctOk = ct.present && ct.playLabelPaused === 'Play' && ct.playsOnClick && ct.playLabelPlaying === 'Pause' && ct.pausesOnClick && ct.scrubSeeks === 42 && ct.scrubMax === r.frameCount - 1 && ct.mutedAfter === false && ct.nextFrame === 43 && ct.noFullscreen;
-    if (!ctOk) fail('controls', ct); else pass('controls', { scrubSeeks: ct.scrubSeeks, nextFrame: ct.nextFrame, hiddenWhilePlaying: ct.hiddenWhilePlaying, timeLabel: ct.timeLabel });
+    const skipTo = 42 + Math.round(10 * r.frameRate);   // +10 s from frame 42
+    const ctOk = ct.present && ct.playLabelPaused === 'Play' && ct.playsOnClick && ct.playLabelPlaying === 'Pause' && ct.pausesOnClick && ct.scrubSeeks === 42 && ct.scrubMax === r.frameCount - 1 && ct.mutedAfter === false && ct.noFullscreen
+      && ct.defaultSet?.skip && !ct.defaultSet?.step && ct.fwd10 === skipTo && ct.back10 === 42
+      && ct.framestepSet?.skip && ct.framestepSet?.step && ct.nextFrame === 43 && !ct.noskipSet?.skip && ct.noskipSet?.step;
+    if (!ctOk) fail('controls', { ...ct, skipTo }); else pass('controls', { scrubSeeks: ct.scrubSeeks, fwd10: ct.fwd10, back10: ct.back10, nextFrame: ct.nextFrame, subsets: 'default skip / framestep / noskip', hiddenWhilePlaying: ct.hiddenWhilePlaying, timeLabel: ct.timeLabel });
+    // removal: paused and released (decoders, bridges, AudioContext) as a <video> pauses; a move is not a removal; back in, it plays on a fresh engine; pause() aborts a pending play()
+    const rm = r.removal || {};
+    const rmOk = rm.moveKeepsPlaying && rm.pausedOnRemoval && rm.framesAfterRemoval === 0 && rm.contextState === 'closed' && rm.replays && rm.freshEngine && rm.pauseAbortsPlay === 'AbortError' && rm.pausedAfterAbort && rm.framesAfterAbort === 0;
+    if (!rmOk) fail('removal', rm); else pass('removal', rm);
     if (r.rateWorks !== true || r.rateRange !== 'RangeError') fail('playbackRate', { rateWorks: r.rateWorks, rateRange: r.rateRange }); else pass('playbackRate', { setsAndReads: true, outOfRange: r.rateRange });
   } catch (e) { run.ok = verdict.ok = false; run.error = e.message; }
   run.consoleErrors = consoleErrors.splice(0);

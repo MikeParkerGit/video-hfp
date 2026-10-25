@@ -98,10 +98,15 @@ presented frame; the metadata carries `frameNumber` and `clip`). Events at the m
 `loadstart`, `durationchange`, `loadedmetadata`, `loadeddata`, `canplay`, `canplaythrough`, `play`,
 `playing`, `waiting` (a stall), `pause`, `ended`, `seeking`, `seeked`, `timeupdate`, `volumechange`,
 `emptied`, `error`. **`controls` draws the element's own bar** — a drop-in for `<video controls>`:
-play/pause, a frame step either way, the time, a scrubber that works in frames and seeks on
-release, mute, full screen; it leaves while playing and comes back on a touch, a move or a key
-(space, arrows 5 s, shift+arrow one frame, j/l 10 s, m, f); `controlslist="nofullscreen"` hides
-the full-screen button. **`playbackRate`** (0.25–4) scales the clock, keeping the frame on screen
+a scrubber that works in frames and seeks on release, on its own row above play/pause, 10 s back
+and forward, the time, mute and full screen; it leaves while playing and comes back on a touch, a
+move or a key (space, arrows 5 s, shift+arrow one frame, j/l 10 s, m, f). One set of buttons, and
+the page picks the subset with `controlslist`: `framestep` adds the single-frame buttons either
+side of play (for frame-by-frame work), `noskip` drops the 10 s skips, `nofullscreen` the
+full-screen button. **Removing the element pauses it**, as it pauses a `<video>`, and releases its
+decoders, bridges and AudioContext; a move within the page is not a removal, and an element put
+back plays again from where it stopped. A `pause()` that comes before a pending `play()` has
+started wins: that `play()` rejects with `AbortError`. **`playbackRate`** (0.25–4) scales the clock, keeping the frame on screen
 where it is; the audio keeps its pitch through a pitch shifter on the output (`preservesPitch`,
 default true; set it false and the pitch moves with the rate, the old-fashioned way); the `ratechange`
 event. **Not supported, and setting them throws `NotSupportedError`** so nobody is surprised

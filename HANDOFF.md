@@ -120,13 +120,22 @@ before a gesture (gesture-probe.html). The rulings, as built:
   in item 925n88m05v. The bridge is sized per TARGET from the clip's index, which is complete
   at load: `frame − keyBefore(frame)` is the exact decode run the re-targeted decoder must do,
   so no GOP default is ever needed.
+- **Controls: one set of buttons, a subset shown** (Mike, 2026-10-25; built in 0.2.0-beta.3):
+  people watching want 10 s skips, people working want single frames. `<video-hfp controls>` shows
+  the skips; `controlslist="framestep"` adds the frame buttons, `noskip` drops the skips. The next
+  uplift, filed and not built: keep bridges prepared at ±10 s so a skip lands on the next display
+  frame the way a prepared cut does.
+- **Removal pauses and releases** (fixed in 0.2.0-beta.3; Mike found it on the Pixel in Simon
+  Movies, where changing movies played both soundtracks): the element pauses when it leaves the
+  document and destroys its engine; a move is not a removal; `pause()` aborts a pending `play()`.
 
 ## Where it is used
 
 The first consumer is a Merotools toolbox (a WebCodecs-capable WebView on Android, Safari on
 the iPhone). Its rig — servers, ids, the phone procedure — lives with that project, not here.
-The engine has run on a Pixel 9a (Android 17, Chrome 155 WebView); the element, the bridged cut
-and the bridged loop have not been on a phone yet, and no iPhone has run any of it.
+The engine has run on a Pixel 9a (Android 17, Chrome 155 WebView), and the element has played on
+it in Simon Movies (2026-10-25: smooth loops, 2× with the pitch kept); the bridged cut has not
+been on a phone yet, and no iPhone has run any of it.
 
 ## Next task
 
