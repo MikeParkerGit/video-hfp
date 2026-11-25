@@ -26,7 +26,9 @@ const record = () => {
     const tr = e._transition;
     if (snaps && tr && !snapped && (e.now - tr.t0) / (tr.t1 - tr.t0) >= 0.5) { snapped = true; snaps.push(e.canvas.toDataURL('image/png')); }
     rec.push({ t: performance.now(), tr: !!tr, live: tr ? tr.live : null, out: tr ? tr.out.lastIndex : null, inc: e.stats.index, draws, cw: e.canvas.width, ch: e.canvas.height, dec: e.stats.decoders,
-      outGain: tr?.out.audio ? tr.out.audio.gain.gain.value : null, inGain: e._segment?.audio ? e._segment.audio.gain.gain.value : null });
+      outGain: tr?.out.audio ? tr.out.audio.gain.gain.value : null, inGain: e._segment?.audio ? e._segment.audio.gain.gain.value : null,
+      // the crossfade's wiring, which a gain's live value only shows while sound flows through it: the incoming fade-in, the outgoing fade-out, sounding pieces
+      inFadeIn: e._segment?.audio?.spec.fadeIn ?? null, outFaded: tr ? !!tr.out.audioFaded : null, inNodes: e._segment?.audio?._nodes.length ?? 0, ctx: e.audioContext.state, clock: e.stats.clock });
     draws = 0;
     requestAnimationFrame(tick);
   };
@@ -52,6 +54,8 @@ const summary = (rec, mark, clipName) => {
     drawsPerTick: sorted[Math.floor(sorted.length / 2)] ?? 0,
     maxDecoders: Math.max(0, ...during.map((x) => x.dec)),
     canvasMid: mid ? [mid.cw, mid.ch] : null, gainsMid: mid ? [mid.outGain, mid.inGain] : null,
+    audioMid: mid ? { inFadeIn: mid.inFadeIn, outFaded: mid.outFaded, inNodes: mid.inNodes, ctx: mid.ctx, clock: mid.clock } : null,
+    inGainMax: Math.max(0, ...during.map((x) => x.inGain ?? 0)),
     incFirst: inc[0] ?? null, incCount: inc.length, incGaps: gaps, incBack: back,
   };
 };

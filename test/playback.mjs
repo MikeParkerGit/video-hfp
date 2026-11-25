@@ -271,12 +271,15 @@ async function runTransitions() {
     const r = await waitProbe(120000);
     if (r.error) throw new Error(r.error);
     const box = (c) => !!c && Math.abs(c[0] / c[1] - 16 / 9) < 0.02;   // composited in the element's 16:9 box, whatever the clips' shapes
-    const gains = (g) => !!g && g[0] > 0.2 && g[0] < 0.95 && g[1] > 0.2 && g[1] < 0.95;   // both sounds heard halfway through an equal-power crossfade
+    // both sounds heard halfway through an equal-power crossfade: the outgoing gain is part-way down; the incoming one is part-way up
+    // whenever its sound has started (a gain's live value only moves while sound flows through it), and its fade-in spans the transition
+    const crossfade = (x, secs) => !!x.gainsMid && x.gainsMid[0] > 0.2 && x.gainsMid[0] < 0.95 && x.audioMid?.outFaded === true && Math.abs((x.audioMid?.inFadeIn ?? 0) - secs) < 1e-6
+      && (x.audioMid.inNodes === 0 || (x.gainsMid[1] > 0.2 && x.gainsMid[1] < 0.95));
     const s = r.swipe || {};
-    if (!(s.bridgeFrames >= s.plainBridge + 10 && s.live === true && s.outDistinct >= 6 && s.drawsPerTick >= 2 && s.maxDecoders === 1 && box(s.canvasMid) && gains(s.gainsMid)
+    if (!(s.bridgeFrames >= s.plainBridge + 10 && s.live === true && s.outDistinct >= 6 && s.drawsPerTick >= 2 && s.maxDecoders === 1 && box(s.canvasMid) && crossfade(s, 0.4)
       && s.incFirst === 438 && s.incGaps === 0 && s.incBack === 0 && s.stalls === 0 && s.decodersAfter === 1 && s.transitioningAfter === false && s.canvasAfter?.[0] === 1280 && s.ms >= 300)) fail('preparedSwipe', s); else pass('preparedSwipe', s);
     const c = r.coldFade || {};
-    if (!(c.live === true && c.outDistinct >= 6 && c.maxDecoders === 2 && c.decodersAfter === 1 && c.drawsPerTick >= 2 && gains(c.gainsMid) && c.incFirst === 100 && c.incGaps === 0 && c.incBack === 0)) fail('coldFade', c); else pass('coldFade', c);
+    if (!(c.live === true && c.outDistinct >= 6 && c.maxDecoders === 2 && c.decodersAfter === 1 && c.drawsPerTick >= 2 && crossfade(c, 0.4) && c.incFirst === 100 && c.incGaps === 0 && c.incBack === 0)) fail('coldFade', c); else pass('coldFade', c);
     const st = r.stillOut || {};
     if (!(st.live === false && st.outDistinct === 1 && st.maxDecoders <= 1 && st.incFirst === 200 && st.incGaps === 0 && st.incBack === 0 && st.stalls === 0 && st.decodersAfter === 1)) fail('stillOutgoing', st); else pass('stillOutgoing', st);
     if (r.shapes) { const sh = r.shapes; if (!(box(sh.canvasMid) && sh.drawsPerTick >= 2 && sh.canvasAfter?.[0] === 720 && sh.canvasAfter?.[1] === 1280 && sh.videoSize?.[0] === 720)) fail('shapes', sh); else pass('shapes', sh); }
