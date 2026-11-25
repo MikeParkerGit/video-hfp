@@ -276,7 +276,8 @@ async function runTransitions() {
     // emulated audio device it lags; locally both read ≈ 0.7 halfway, the equal-power midpoint.)
     const crossfade = (x, secs) => !!x.gainsMid && x.gainsMid[0] > 0.2 && x.gainsMid[0] < 0.95 && x.audioMid?.outFaded === true && Math.abs((x.audioMid?.inFadeIn ?? 0) - secs) < 1e-6 && x.inGainMax >= 0.9;
     const s = r.swipe || {};
-    if (!(s.bridgeFrames >= s.plainBridge + 10 && s.live === true && s.outDistinct >= 6 && s.drawsPerTick >= 2 && s.maxDecoders === 1 && box(s.canvasMid) && crossfade(s, 0.4)
+    // the hand-off is measured on the part of the bridge left after the transition (the tuning must not learn from the transition's frames)
+    if (!(s.bridgeFrames >= s.plainBridge + 10 && s.handoff && Math.abs(s.handoff.bridge - (s.bridgeFrames - s.transitionFrames)) <= 1 && s.live === true && s.outDistinct >= 6 && s.drawsPerTick >= 2 && s.maxDecoders === 1 && box(s.canvasMid) && crossfade(s, 0.4)
       && s.incFirst === 438 && s.incGaps === 0 && s.incBack === 0 && s.stalls === 0 && s.decodersAfter === 1 && s.transitioningAfter === false && s.canvasAfter?.[0] === 1280 && s.ms >= 300)) fail('preparedSwipe', s); else pass('preparedSwipe', s);
     const c = r.coldFade || {};
     if (!(c.live === true && c.outDistinct >= 6 && c.maxDecoders === 2 && c.decodersAfter === 1 && c.drawsPerTick >= 2 && crossfade(c, 0.4) && c.incFirst === 100 && c.incGaps === 0 && c.incBack === 0)) fail('coldFade', c); else pass('coldFade', c);

@@ -777,7 +777,9 @@ export class Player extends EventTarget {
       old.source = null;
       this._startDecoder(dec, { from: s.from, to: s.to, loop: s.loop, startIndex: s.indexForP(s.nextPassP), pStart: s.nextPassP }, s.length);
       s.standby = dec;
-      if (s.watch) s.watch.startP = s.lastP + 1;   // the clock on the bridge starts now
+      // the clock on the bridge starts now, and what it measures is the part of the bridge left for the decoder — after a
+      // transition that re-targeted at its end, not the frames the transition used (those would teach every bridge to shrink)
+      if (s.watch) { s.watch.startP = s.lastP + 1; s.watch.n = Math.max(1, s.nextPassP - s.watch.startP); }
     } catch (e) { this._closeSource(dec); if (reuse) this._decoders.delete(src0); old.source = null; s.standby = null; this._emitError(e, s.clip, false); }
   }
   /** What a replaced segment still holds goes (its decoder is closed or re-targeted by the caller); `s` is what replaced it. */

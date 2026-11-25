@@ -37,6 +37,8 @@ const record = () => {
 };
 const frames = [];
 v.addEventListener('frame', (ev) => frames.push([ev.clip.name, ev.index]));
+const handoffs = [];
+v.addEventListener('handoff', (ev) => handoffs.push({ clip: ev.clip.name, bridge: ev.bridge, used: ev.used, late: ev.late }));
 const switches = [];
 v.addEventListener('switch', (ev) => switches.push({ from: ev.fromClip?.name ?? null, fromFrame: ev.fromFrame, to: ev.toClip.name, toFrame: ev.toFrame, transition: ev.transition }));
 const summary = (rec, mark, clipName) => {
@@ -72,7 +74,8 @@ try {
   let mark = frames.length, stalls0 = e.stats.stalls, stop = record();
   v.cut(h, 438, { transition: swipe });
   await sleep(1300);
-  Object.assign(probe.swipe, summary(stop(), mark, 'B'), { stalls: e.stats.stalls - stalls0, decodersAfter: e.stats.decoders, transitioningAfter: v.transitioning, canvasAfter: [e.canvas.width, e.canvas.height] });
+  Object.assign(probe.swipe, summary(stop(), mark, 'B'), { stalls: e.stats.stalls - stalls0, decodersAfter: e.stats.decoders, transitioningAfter: v.transitioning, canvasAfter: [e.canvas.width, e.canvas.height],
+    transitionFrames: Math.ceil(0.4 * B.fps), handoff: handoffs.find((x) => x.clip === 'B') ?? null });
 
   // 2. a crossfade with nothing prepared (a cold cut): the new clip starts its own decoder, the outgoing keeps its own until the end
   mark = frames.length; stalls0 = e.stats.stalls; stop = record();
