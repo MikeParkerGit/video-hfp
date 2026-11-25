@@ -12,7 +12,7 @@ const A = await v.open(`clips/${q.get('a') || 'A.mp4'}`, { name: 'A' });
 const B = await v.open(`clips/${q.get('b') || 'B.mp4'}`, { name: 'B' });
 const R = q.get('rot') ? await v.open(`clips/${q.get('rot')}`, { name: 'R' }) : null;
 const e = v.engine;
-const probe = window.__probe = { done: false };
+const probe = window.__probe = { done: false, desynchronized: !!e.ctx.getContextAttributes?.().desynchronized };
 
 // every display frame while recording: the transition's state, the outgoing and incoming frame, draws on the canvas, its size, decoders, gains
 let draws = 0;

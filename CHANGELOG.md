@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.0-beta.8 — 2026-11-25
+- **Swipes no longer flicker on Android.** The canvas was created with the low-latency `desynchronized` hint, which Chrome honours on Android: each draw call reached the screen as it happened. One draw per frame never showed it; a transition resizes the canvas when it starts and clears and draws twice every frame, so the cleared and half-composed states flashed for the first frames of a swipe (Simon Movies on a Pixel). The context is a normal one now — frames are drawn in requestAnimationFrame, so they still show on that display frame — and the suite checks it.
+
 ## 0.2.0-beta.7 — 2026-11-25
 - **A prepared transition no longer teaches every bridge to shrink.** When the decoder re-targets at a transition's end, the hand-off it is measured on is the part of the bridge left after the transition; 0.2.0-beta.6 measured it against the whole bridge, the transition's frames included, so each swipe looked like a bridge far too long and the learned scale (stored for the site) dropped — ×0.31, then ×0.10, in two swipes on Simon Movies. The playback suite now checks the hand-off's size after a swipe.
 - A crossfade's fade-in that is scheduled late (a slow device) still ends with the transition instead of running its full length from then.

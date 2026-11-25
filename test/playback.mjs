@@ -270,6 +270,8 @@ async function runTransitions() {
     await send('Page.navigate', { url: `http://localhost:${port}/demo/transition.html?${qs}` });
     const r = await waitProbe(120000);
     if (r.error) throw new Error(r.error);
+    // a desynchronized canvas shows each draw call as it happens: a transition's clear and two draws per frame flickered on Android
+    if (r.desynchronized !== false) fail('wholeFrames', { desynchronized: r.desynchronized }); else pass('wholeFrames', { desynchronized: false });
     const box = (c) => !!c && Math.abs(c[0] / c[1] - 16 / 9) < 0.02;   // composited in the element's 16:9 box, whatever the clips' shapes
     // the crossfade: the outgoing clip fades out over the transition (its gain part-way down halfway), the incoming one fades in over the
     // same span and is at full by its end. (A gain's live value at one instant is not read for the incoming side: on a runner with an

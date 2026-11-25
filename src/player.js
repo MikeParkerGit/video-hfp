@@ -61,7 +61,11 @@ export class Player extends EventTarget {
   constructor(canvas, { audioContext, lookahead = 6, avOffset = 0, worker = false } = {}) {
     super();
     this.canvas = canvas;
-    this.ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
+    // A normal (synchronized) context: the page shows each display frame's drawing whole. The low-latency `desynchronized` hint put
+    // every draw call on screen as it happened — invisible with one draw per frame, but a transition clears, resizes and draws twice
+    // per frame, and on Android (Chrome honours the hint there) the half-drawn states flickered. Frames are drawn in requestAnimationFrame,
+    // so the normal path shows them on that same display frame.
+    this.ctx = canvas.getContext('2d', { alpha: false });
     this._ownsContext = !audioContext;
     this.audioContext = audioContext ?? new (globalThis.AudioContext || globalThis.webkitAudioContext)({ latencyHint: 'interactive' });
     this.audio = new AudioEngine(this.audioContext);
