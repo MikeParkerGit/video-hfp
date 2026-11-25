@@ -111,6 +111,8 @@ export class VideoHFP extends HTMLElementBase {
     this._dataFiredFor = null;      // the clip loadeddata / canplay were fired for
     this._observer = null;
     this._connected = false;
+    this._shownClip = null;         // the clip the size, the duration and the controls describe
+    this._clipKey = new WeakMap();  // Clip → its key in _opened, so forget() can drop it
     this._gone = false;             // removed from the document: paused, engine released, no autoplay until it is back
     this._playGen = 0;              // bumped by pause() and removal: a play() still opening its clip then rejects with AbortError
     this._controls = { bar: this._root.querySelector('.hfp-controls'), hideTimer: 0, scrubbing: false, resumeAfterScrub: false };
@@ -124,7 +126,7 @@ export class VideoHFP extends HTMLElementBase {
   _makeEngine() {
     const engine = this._engine = new Player(this._canvas, { worker: this.hasAttribute('worker'), ...this._engineOpts });
     engine.addEventListener('frame', (e) => this._onFrame(e));
-    engine.addEventListener('switch', (e) => this._fire('switch', { fromClip: e.fromClip, fromFrame: e.fromFrame, toClip: e.toClip, toFrame: e.toFrame }));
+    engine.addEventListener('switch', (e) => { this._fire('switch', { fromClip: e.fromClip, fromFrame: e.fromFrame, toClip: e.toClip, toFrame: e.toFrame, transition: e.transition }); this._clipChanged(e.toClip); });
     engine.addEventListener('loop', (e) => this._fire('loop', { clip: e.clip, pass: e.pass }));
     engine.addEventListener('stall', (e) => { this._waiting = true; this._readyState = 2; this._fire('stall', { clip: e.clip, p: e.p }); this._fire('waiting'); });
     engine.addEventListener('ended', (e) => this._onEnded(e));
@@ -185,7 +187,9 @@ export class VideoHFP extends HTMLElementBase {
   // ---- the <video> surface ------------------------------------------------------------------
   get src() { return this.getAttribute('src') ?? ''; }
   set src(v) { this.setAttribute('src', v); }
-  get currentSrc() { return this._main?.url ?? ''; }
+  get currentSrc() { return (this._currentClip() ?? this._main)?.url ?? ''; }
+  /** A cut's transition (a swipe or a crossfade) is on screen. */
+  get transitioning() { return !!this._engine?.transitioning; }
   get width() { return Number(this.getAttribute('width')) || 0; }
   set width(v) { this.setAttribute('width', String(v)); }
   get height() { return Number(this.getAttribute('height')) || 0; }
@@ -284,6 +288,7 @@ export class VideoHFP extends HTMLElementBase {
     if (!p) {
       p = loadClip(typeof src === 'string' ? key : src, { name, ...rest });
       this._opened.set(key, p);
+      p.then((c) => this._clipKey.set(c, key), () => {});
       p.catch(() => { if (this._opened.get(key) === p) this._opened.delete(key); });
     }
     if (name) p.then((c) => { this._clips.set(name, c); if (!c.name || c.name === 'clip') c.name = name; }).catch(() => {});
@@ -372,6 +377,36 @@ export class VideoHFP extends HTMLElementBase {
     return t;
   }
   cancelCut() { this._engine?.cancelCut(); }
+  /**
+   * Make `target`'s `frame` the paused position without playing: whatever plays stops, the frame is shown, and play() starts there
+   * with opts { from, to, loop } (default: the whole clip, looped when the element has `loop`). Resolves once the frame is up.
+   */
+  cue(target, frame = 0, opts = {}) {
+    const { clip } = this._target(target, frame);
+    const from = opts.from ?? 0, to = opts.to ?? clip.frameCount, loop = opts.loop ?? this.loop;
+    if (!(frame >= from && frame < to)) throw new RangeError(`cue: frame ${frame} is outside [${from}, ${to})`);
+    this.pause();
+    this._pos = { clip, from, to, loop, index: frame };
+    this._ended = false;
+    this._clipChanged(clip);
+    return this._showFrame(clip, frame).then(() => { this._fire('timeupdate'); });
+  }
+  /**
+   * Let go of a clip opened with open(): its prepared bridges, its audio windows and its cached bytes. A clip that is playing, about to, on
+   * screen in a transition, cued, or the element's own `src` is kept (returns false); forget it once the stage has moved on. Opening the
+   * same URL again loads it afresh.
+   */
+  forget(target) {
+    const clip = this._clipOf(target);
+    const e = this._engine;
+    if (!clip || e?.uses(clip) || this._pos?.clip === clip || this._main === clip) return false;
+    e?.forgetClip(clip);
+    const key = this._clipKey.get(clip);
+    if (key !== undefined) this._opened.delete(key);
+    for (const [n, c] of this._clips) if (c === clip) this._clips.delete(n);
+    try { clip.close(); } catch { /* nothing held */ }
+    return true;
+  }
   /** Prepare a target (a bridge), or an array of { clip, frame }. Resolves to the handle(s). */
   prepare(target, frame, opts) {
     if (Array.isArray(target)) return this.engine.prepare(target.map((t) => ({ ...t, clip: this._clipOf(t.clip) })), undefined, opts);
@@ -522,6 +557,7 @@ export class VideoHFP extends HTMLElementBase {
     const p = this._mainPromise = this.open(src).then((clip) => {
       if (this._mainPromise !== p) return clip;
       this._main = clip; this._readyState = 1; this._networkState = 1;
+      this._shownClip = clip;
       this._applySize();
       this._fire('durationchange'); this._fire('loadedmetadata');
       if (this._gone) return clip;   // removed while its index loaded: nothing starts, nothing decodes
@@ -574,13 +610,22 @@ export class VideoHFP extends HTMLElementBase {
   _applyVolume() { const e = this._engine; if (!e) return; const muted = this.muted; e.muted = muted; e.masterGain.gain.value = muted ? 0 : this._volume; }
   /** Like <video>: the width/height attributes when given, else the clip's own size; one of them given, the other follows the aspect ratio. */
   _applySize() {
-    const w = this.width, h = this.height, c = this._main;
+    const w = this.width, h = this.height, c = this._currentClip() ?? this._main;   // the clip on screen, as <video> follows its current video
     const vw = c?.displayWidth ?? 0, vh = c?.displayHeight ?? 0;
     if (vw && vh) this.style.setProperty('--video-hfp-aspect', `${vw} / ${vh}`);
     if (w && h) { this.style.setProperty('--video-hfp-width', `${w}px`); this.style.setProperty('--video-hfp-height', `${h}px`); }
     else if (w) { this.style.setProperty('--video-hfp-width', `${w}px`); this.style.removeProperty('--video-hfp-height'); }
     else if (h) { this.style.setProperty('--video-hfp-height', `${h}px`); this.style.setProperty('--video-hfp-width', `${vw && vh ? Math.round(h * vw / vh) : h * 2}px`); }
     else if (vw) { this.style.setProperty('--video-hfp-width', `${vw}px`); this.style.removeProperty('--video-hfp-height'); }
+  }
+  /** The clip on screen changed (a cut, a cue): the size, the duration and the controls follow it, as <video> follows a new video. */
+  _clipChanged(clip) {
+    if (!clip || clip === this._shownClip) return;
+    const prev = this._shownClip;
+    this._shownClip = clip;
+    this._applySize(); this._controlsMeta();
+    this._fire('durationchange');
+    if (prev && (prev.displayWidth !== clip.displayWidth || prev.displayHeight !== clip.displayHeight)) this._fire('resize');
   }
   _applyPoster() {
     const url = this.getAttribute('poster');

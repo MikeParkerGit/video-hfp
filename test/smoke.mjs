@@ -18,6 +18,7 @@ import { canDo } from '../src/budget.js';
 import { plan } from '../src/plan.js';
 import { KNOWN_PROFILES, knownProfile, HARDWARE_FLOOR } from '../src/profiles.js';
 import { bridgeFrames, maxBridgeFrames, adjustBridge, MIN_BRIDGE_FRAMES } from '../src/bridge.js';
+import { normalizeTransition, transitionFrames } from '../src/transition.js';
 import { syntheticClip } from '../src/plan.js';
 
 const clips = ['demo/clips/A.mp4', 'demo/clips/B.mp4', 'demo/clips/A-normal.mp4', 'demo/clips/A-vp9.webm', 'demo/clips/A-rot.mp4'].filter(existsSync);
@@ -165,4 +166,18 @@ assert.ok(p4.ok && p4.profiles[0].facts.memoryLevel === 'warning' && p4.profiles
 const p5 = plan({ width: 1280, height: 720, fps: 30, gop: 12, prepared: 20 }, phone);
 assert.ok(p5.ok && p5.profiles[0].facts.memoryLevel === 'ok' && p5.profiles[0].warnings.length === 0, 'twenty 720p bridges (≈400 MB): under the warning boundary');
 console.log(`✓ plan: 6 prepared + 1-frame cold switch → phone limits: ${phoneReport.limits.map((l) => l.split(':')[0]).join(', ')}; 2 prepared + a cutover 30 frames ahead → fits; memory: 40 × 1080p → critical (${Math.round(p3.profiles[0].facts.residentFrameBytes / 1048576)} MB), 30 × 720p → warning (${Math.round(p4.profiles[0].facts.residentFrameBytes / 1048576)} MB), 20 × 720p → ok (${Math.round(p5.profiles[0].facts.residentFrameBytes / 1048576)} MB)`);
+// transitions: the spec a caller writes, and how many frames one spans
+{
+  const sw = normalizeTransition('swipe-right'), fd = normalizeTransition('fade'), n = normalizeTransition(250), sw0 = normalizeTransition('swipe');
+  assert.deepEqual([sw.type, sw.direction, sw.duration, fd.type, fd.direction, fd.duration, n.type, n.duration, sw0.direction], ['swipe', 'right', 350, 'fade', null, 300, 'fade', 250, 'left']);
+  assert.equal(normalizeTransition(null), null); assert.equal(normalizeTransition('none'), null); assert.equal(normalizeTransition(false), null);
+  const custom = normalizeTransition({ type: 'swipe', direction: 'up', duration: 500, easing: 'linear' });
+  assert.equal(custom.easing(0.5), 0.5); assert.equal(custom.seconds, 0.5);
+  assert.ok(Math.abs(normalizeTransition('swipe').easing(0.5) - 0.875) < 1e-9);   // ease-out: most of the way at half time
+  for (const bad of ['wobble', 'fade-left', { type: 'swipe', direction: 'sideways' }, { type: 'fade', easing: 'bouncy' }]) assert.throws(() => normalizeTransition(bad), TypeError);
+  assert.throws(() => normalizeTransition({ type: 'fade', duration: 0 }), RangeError);
+  assert.equal(transitionFrames({ fps: 30 }, normalizeTransition({ type: 'fade', duration: 400 })), 12);
+  assert.equal(transitionFrames({ fps: 60 }, normalizeTransition('swipe'), 2), 42);   // 350 ms of a 60 fps clip at 2×
+  console.log('✓ transitions: \'fade\' 300 ms, \'swipe\' 350 ms left, a number is a fade; bad specs throw; 400 ms at 30 fps = 12 frames');
+}
 console.log('all good');

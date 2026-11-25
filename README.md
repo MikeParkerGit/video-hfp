@@ -130,6 +130,29 @@ Events on top of the `<video>` set: `frame` (`clip`, `index`, `p`), `switch` (`f
 Declarative clips: children `<hfp-clip name="b" src="b.mp4" prepare-at="438">` are opened (and
 prepared) when the element connects; a target may be a Clip, a declared name, or a handle.
 
+**Transitions.** A cut can be a swipe or a crossfade instead of a hard frame swap — drawn on the element's
+own canvas, every display frame, on the same clock as the frames, with the audio crossfading (equal power)
+over the same span:
+
+```js
+const next = await v.open('next.mp4');
+const h = await v.prepare(next, 0, { transition: 'swipe-left' });   // the bridge also carries the swipe
+v.cut(h, 0, { loop: true, transition: 'swipe-left' });            // the playing clip slides out left while it keeps playing
+v.cut(other, 0, { transition: { type: 'fade', duration: 500, easing: 'ease-in-out' } });
+v.cutAfter(1527, 'b', 438, { transition: 'fade' });                // on a boundary, like any cut
+```
+
+`'fade'` (300 ms) and `'swipe'` / `'swipe-left' | 'swipe-right' | 'swipe-up' | 'swipe-down'` (350 ms; the
+direction is the way the picture moves), a number (a fade of that many ms), or `{ type, direction, duration,
+easing }`. The outgoing clip keeps playing through the transition when its decoder can stay: on a cold cut it
+has its own, and on a prepared one the bridge is lengthened by `prepare(…, { transition })` to cover the
+transition before the decoder re-targets — still one decoder. A target prepared without it (or a transition
+longer than its bridge) still transitions; the outgoing clip then holds its last frame. Both clips are placed
+in the element's box by its `object-fit`, so clips of different shapes swipe and fade cleanly; afterwards the
+canvas is the new clip's size again. `v.transitioning` is true while one is on screen; `switch` carries
+`transition`. A page that moves between many clips can `v.cue(clip, frame)` (show a frame, paused, ready to
+play from it) and `v.forget(clip)` (let a clip it is done with go: bridges, audio, cached bytes).
+
 `v.engine` is the `Player` behind the element (stats, the AudioContext, the clock); the probe and
 the plan are module functions, not element members: the element plays, the tools advise.
 

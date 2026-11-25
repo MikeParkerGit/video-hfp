@@ -189,9 +189,14 @@ class ClipAudio {
   close() { this._windows.clear(); this._whole = null; if (this._decoder) { try { this._decoder.close(); } catch { /* */ } this._decoder = null; } }
 }
 
+// an equal-power crossfade: the two gains are sin/cos of the progress, so the loudness holds through the middle
+const CURVE_POINTS = 33;
+const FADE_IN = Float32Array.from({ length: CURVE_POINTS }, (_, i) => Math.sin((i / (CURVE_POINTS - 1)) * Math.PI / 2));
+const FADE_OUT = Float32Array.from({ length: CURVE_POINTS }, (_, i) => Math.cos((i / (CURVE_POINTS - 1)) * Math.PI / 2));
+
 class AudioSegment {
   /**
-   * @param {{ clip, from, to, loop, startIndex, tStart, ctxTime: (t:number)=>number }} spec
+   * @param {{ clip, from, to, loop, startIndex, tStart, fadeIn?: number, ctxTime: (t:number)=>number }} spec  fadeIn: seconds of an equal-power fade-in (the incoming half of a crossfade)
    */
   constructor(engine, spec) {
     this.engine = engine; this.spec = spec;
@@ -199,9 +204,14 @@ class AudioSegment {
     this.ca = engine.clipAudio(clip);
     this.gain = engine.ctx.createGain();
     this.gain.connect(engine.master);
-    const t0 = spec.ctxTime(spec.tStart);
-    this.gain.gain.setValueAtTime(0, Math.max(0, t0));
-    this.gain.gain.linearRampToValueAtTime(1, Math.max(0, t0) + FADE);
+    const t0 = Math.max(0, spec.ctxTime(spec.tStart));
+    if (spec.fadeIn > FADE) {
+      this.gain.gain.value = 0;
+      try { this.gain.gain.setValueCurveAtTime(FADE_IN, t0, spec.fadeIn); } catch { this.gain.gain.setValueAtTime(0, t0); this.gain.gain.linearRampToValueAtTime(1, t0 + spec.fadeIn); }
+    } else {
+      this.gain.gain.setValueAtTime(0, t0);
+      this.gain.gain.linearRampToValueAtTime(1, t0 + FADE);
+    }
     this.mFrom = clip.frameTime(spec.from) + clip.audioOffset;
     this.mTo = clip.rangeEnd(spec.to) + clip.audioOffset;
     this.mStart = (spec.mediaStart ?? clip.frameTime(spec.startIndex)) + clip.audioOffset;   // mediaStart: a sub-frame position (a rate change mid-frame)
@@ -258,15 +268,25 @@ class AudioSegment {
       this.ca.window(nextW).catch(() => {});
     } finally { this._filling = false; }
   }
-  /** Fade out and stop at player time t (nodes already scheduled past t are cut by the gain). */
-  stopAt(t) {
+  /**
+   * Fade out and stop at player time t (nodes already scheduled past t are cut by the gain). With `fadeFrom`, the fade is an
+   * equal-power one over [fadeFrom, t] — the outgoing half of a crossfade; otherwise a few milliseconds before t.
+   */
+  stopAt(t, { fadeFrom } = {}) {
     if (this._stopped) return;
     this._stopAt = Math.min(this._stopAt, t);
     const ctx = this.engine.ctx, at = Math.max(this.spec.ctxTime(t), ctx.currentTime);
     const g = this.gain.gain;
-    g.cancelScheduledValues(Math.max(at - FADE, ctx.currentTime));
-    g.setValueAtTime(1, Math.max(at - FADE, ctx.currentTime));
-    g.linearRampToValueAtTime(0, at);
+    const from = fadeFrom != null ? Math.max(this.spec.ctxTime(fadeFrom), ctx.currentTime) : at - FADE;
+    if (fadeFrom != null && at - from > FADE) {
+      if (typeof g.cancelAndHoldAtTime === 'function') g.cancelAndHoldAtTime(from); else g.cancelScheduledValues(from);
+      try { g.setValueCurveAtTime(FADE_OUT, from, at - from); }
+      catch { try { g.cancelScheduledValues(from); g.setValueAtTime(1, from); g.linearRampToValueAtTime(0, at); } catch { /* a fade-in still running: the nodes stop at t regardless */ } }
+    } else {
+      g.cancelScheduledValues(Math.max(at - FADE, ctx.currentTime));
+      g.setValueAtTime(1, Math.max(at - FADE, ctx.currentTime));
+      g.linearRampToValueAtTime(0, at);
+    }
     for (const n of this._nodes) { try { n.stop(at); } catch { /* not started */ } }
     this._stopped = true;
     setTimeout(() => this.dispose(), Math.max(0, (at - ctx.currentTime) * 1000) + 50);

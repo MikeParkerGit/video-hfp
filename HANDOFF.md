@@ -129,6 +129,12 @@ before a gesture (gesture-probe.html). The rulings, as built:
   Movies, where changing movies played both soundtracks): the element pauses when it leaves the
   document and destroys its engine; a move is not a removal; `pause()` aborts a pending `play()`.
 
+- **Transitions in the player** (Mike, 2026-11-24: "not all transitions should be instant frame swaps — swipes and crossfades
+  might be better UI in different use cases"; built in 0.2.0-beta.6): a cut takes `transition`; the engine composites both clips on
+  its one canvas, locked to the frame clock, and crossfades the audio. A page should not do this with two elements and CSS: that
+  cannot land on a frame or crossfade sound sample-accurately, and costs a second engine. Prepared with the transition, a swipe
+  needs one decoder (the bridge covers the transition, the decoder re-targets at its end).
+
 ## Where it is used
 
 The first consumer is a Merotools toolbox (a WebCodecs-capable WebView on Android, Safari on

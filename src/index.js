@@ -13,6 +13,7 @@ export { KNOWN_PROFILES, HARDWARE_FLOOR, knownProfile } from './profiles.js';
 export { plan, syntheticClip } from './plan.js';
 export { probeBridgeCompression } from './bridge-probe.js';
 export { Bridge, BridgeSource, buildBridge, bridgeFrames, maxBridgeFrames, adjustBridge, MIN_BRIDGE_FRAMES } from './bridge.js';
+export { normalizeTransition, transitionFrames } from './transition.js';
 
 /** Quick capability check for the current browser/webview. */
 export async function probeSupport() {

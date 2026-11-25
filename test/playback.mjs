@@ -255,6 +255,44 @@ async function runCompat() {
   run.consoleErrors = consoleErrors.splice(0);
   verdict.runs.push(run);
 }
+/**
+ * Transitions (transition.html): a swipe onto a target prepared with it keeps the outgoing clip moving on ONE decoder and
+ * crossfades the audio; a cold crossfade runs two decoders and ends on one; a bridge too short for its transition holds the
+ * outgoing frame; a portrait clip after a landscape one; a pause mid-transition; cutAfter; bad specs; cue() and forget().
+ */
+async function runTransitions() {
+  const run = { label: 'transitions (transition.html: swipe, crossfade, still outgoing, shapes, pause, cutAfter, cue, forget)', ok: true, checks: {} };
+  const fail = (name, why) => { run.ok = verdict.ok = false; run.checks[name] = { ok: false, ...why }; };
+  const pass = (name, detail) => { run.checks[name] = { ok: true, ...detail }; };
+  try {
+    const h264 = support?.h264;
+    const qs = h264 ? 'a=A.mp4&b=B.mp4' + (existsSync(path.join(ROOT, 'demo/clips/A-rot.mp4')) ? '&rot=A-rot.mp4' : '') : 'a=A-vp9.webm&b=B-vp9.webm';
+    await send('Page.navigate', { url: `http://localhost:${port}/demo/transition.html?${qs}` });
+    const r = await waitProbe(120000);
+    if (r.error) throw new Error(r.error);
+    const box = (c) => !!c && Math.abs(c[0] / c[1] - 16 / 9) < 0.02;   // composited in the element's 16:9 box, whatever the clips' shapes
+    const gains = (g) => !!g && g[0] > 0.2 && g[0] < 0.95 && g[1] > 0.2 && g[1] < 0.95;   // both sounds heard halfway through an equal-power crossfade
+    const s = r.swipe || {};
+    if (!(s.bridgeFrames >= s.plainBridge + 10 && s.live === true && s.outDistinct >= 6 && s.drawsPerTick >= 2 && s.maxDecoders === 1 && box(s.canvasMid) && gains(s.gainsMid)
+      && s.incFirst === 438 && s.incGaps === 0 && s.incBack === 0 && s.stalls === 0 && s.decodersAfter === 1 && s.transitioningAfter === false && s.canvasAfter?.[0] === 1280 && s.ms >= 300)) fail('preparedSwipe', s); else pass('preparedSwipe', s);
+    const c = r.coldFade || {};
+    if (!(c.live === true && c.outDistinct >= 6 && c.maxDecoders === 2 && c.decodersAfter === 1 && c.drawsPerTick >= 2 && gains(c.gainsMid) && c.incFirst === 100 && c.incGaps === 0 && c.incBack === 0)) fail('coldFade', c); else pass('coldFade', c);
+    const st = r.stillOut || {};
+    if (!(st.live === false && st.outDistinct === 1 && st.maxDecoders <= 1 && st.incFirst === 200 && st.incGaps === 0 && st.incBack === 0 && st.stalls === 0 && st.decodersAfter === 1)) fail('stillOutgoing', st); else pass('stillOutgoing', st);
+    if (r.shapes) { const sh = r.shapes; if (!(box(sh.canvasMid) && sh.drawsPerTick >= 2 && sh.canvasAfter?.[0] === 720 && sh.canvasAfter?.[1] === 1280 && sh.videoSize?.[0] === 720)) fail('shapes', sh); else pass('shapes', sh); }
+    const pz = r.pause || {};
+    if (!(pz.wasTransitioning && pz.transitioningAfter === false && pz.canvas?.[0] === 1280 && pz.decoders === 0 && pz.paused)) fail('pauseMidTransition', pz); else pass('pauseMidTransition', pz);
+    const ca = r.cutAfter || {};
+    if (!(ca.switch && ca.switch.fromFrame === ca.at && ca.switch.toFrame === 0 && ca.switch.transition === 'fade')) fail('cutAfter', ca); else pass('cutAfter', ca);
+    const er = r.errors || {};
+    if (!(er.badType === 'TypeError' && er.badDirection === 'TypeError' && er.badDuration === 'RangeError' && er.prepareBad === 'TypeError')) fail('badSpecs', er); else pass('badSpecs', er);
+    const cu = r.cue || {}, fg = r.forget || {};
+    if (!(cu.paused && cu.frame === 50 && cu.clip === 'A' && cu.durationchange >= 1)) fail('cue', cu); else pass('cue', cu);
+    if (!(fg.keptWhileCued === false && fg.forgotten === true && fg.reopenedFresh === true && fg.bridgesLeftForA === 0)) fail('forget', fg); else pass('forget', fg);
+  } catch (e) { run.ok = verdict.ok = false; run.error = e.message; }
+  run.consoleErrors = consoleErrors.splice(0);
+  verdict.runs.push(run);
+}
 /** A rotated clip (a phone's portrait recording: a 90° display matrix) draws upright: the element's size and the canvas are portrait. */
 async function runRotated() {
   const run = { label: 'rotation (A-rot.mp4: a 90° display matrix, drawn upright)', ok: true, checks: {} };
@@ -297,6 +335,7 @@ try {
   else await runPair('A-vp9.webm', 'B-vp9.webm', 'decode in a Worker, busy main thread during the loop (VP9: no H.264 here)', { worker: true });
   await runCompat();
   await runRotated();
+  await runTransitions();
   runGesture();
   const ran = verdict.runs.filter((r) => !r.skipped);
   if (!ran.length) verdict.ok = false;

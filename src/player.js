@@ -44,6 +44,7 @@ import { BridgeSource, buildBridge, bridgeFrames, adjustBridge, MIN_BRIDGE_FRAME
 import { HARDWARE_FLOOR } from './profiles.js';
 import { probeDevice, floorFromProfile, storedProfile, storedTune, storeTune } from './probe.js';
 import { MEMORY_WARNING, MEMORY_CRITICAL, memoryLevel } from './budget.js';
+import { normalizeTransition, transitionFrames, composeTransition, fitOf } from './transition.js';
 
 const START_DELAY_PLAY = 0.03;     // seconds; play() can afford a margin for decoder/audio setup
 const START_DELAY_SWITCH = 0.005;  // a cut promises the next display frame
@@ -92,6 +93,7 @@ export class Player extends EventTarget {
     this._wall = null;         // { base, perf } while the clock runs on performance.now()
     this._blockedFor = null;
     this._pendingStart = null;
+    this._transition = null;   // { out, live, t0, t1, spec, fit } while a cut's transition runs: the outgoing segment, still drawn
     this._destroyed = false;
     this._tick = this._tick.bind(this);
   }
@@ -120,6 +122,8 @@ export class Player extends EventTarget {
   /** Context time at which audio must START to be heard at player time t. */
   _ctxTime(t) { return t - this._offset; }
   get playing() { return !!(this._segment || this._next || this._pendingStart || this._deferred); }
+  /** A cut's transition (a swipe or a crossfade) is on screen right now. */
+  get transitioning() { return !!this._transition; }
   get clip() { return this._segment?.clip ?? null; }
   get currentFrame() { return this.stats.index; }
   /** The bridges held right now. */
@@ -164,6 +168,16 @@ export class Player extends EventTarget {
   bridgeFramesFor(clip, frame) {
     const n = Math.ceil(bridgeFrames(clip, frame, this.floor) * this.tune.scale * this._rate);   // a bridge is frames; at a higher rate they pass faster
     return Math.min(clip.frameCount - frame, Math.max(MIN_BRIDGE_FRAMES, n));
+  }
+  /**
+   * A bridge that also carries a transition: the transition's frames come from it while the outgoing clip keeps its
+   * decoder, then that decoder re-targets — so after them, the bridge a re-target needs from there.
+   */
+  _transitionBridgeFrames(clip, frame, spec, floor = this.floor) {
+    const T = transitionFrames(clip, spec, this._rate);
+    const at = Math.min(clip.frameCount - 1, frame + T);
+    const n = floor === this.floor ? this.bridgeFramesFor(clip, at) : bridgeFrames(clip, at, floor);
+    return Math.min(clip.frameCount - frame, T + n);
   }
   _basis() { return this.floor.measuredAt ?? 'baseline'; }
   _saveTune() { this.stats.bridgeScale = this.tune.scale; this.stats.tuned = this.tune.observations; storeTune(this.tune, this._basis()); }
@@ -237,7 +251,7 @@ export class Player extends EventTarget {
   _account() {
     let bytes = 0;
     for (const h of this._prepared) if (h.ready) bytes += h.bytes;
-    for (const seg of [this._segment, this._next]) {
+    for (const seg of [this._segment, this._next, this._transition?.out]) {
       if (!seg) continue;
       if (seg.loopBridge) bytes += seg.loopBridge.bytes;
       if (seg.loopBridgeSeed) bytes += seg.loopBridgeSeed.bytes;
@@ -271,15 +285,17 @@ export class Player extends EventTarget {
    * `bridge`), fetch the bytes of the hand-off run and warm the first audio window. Resolves to a
    * Prepared handle { clip, frame, bridgeFrames, bytes, ready, release() }; the same clip and frame
    * twice is the same handle. An array of { clip, frame } resolves to an array. No decoder is held,
-   * and there is no cap: memory is the caller's, and plan() says how much.
+   * and there is no cap: memory is the caller's, and plan() says how much. `transition` (the one the
+   * cut will use) lengthens the bridge so the outgoing clip keeps moving through the whole transition.
    */
-  async prepare(target, frame, { bridge, floor = this.floor } = {}) {
-    if (Array.isArray(target)) return Promise.all(target.map((t) => this.prepare(t.clip, t.frame, { bridge: t.bridge ?? bridge, floor })));
+  async prepare(target, frame, { bridge, floor = this.floor, transition } = {}) {
+    if (Array.isArray(target)) return Promise.all(target.map((t) => this.prepare(t.clip, t.frame, { bridge: t.bridge ?? bridge, floor, transition: t.transition ?? transition })));
+    const tr = normalizeTransition(transition);
     const clip = target;
     if (!clip || !Number.isInteger(frame) || frame < 0 || frame >= clip.frameCount) throw new RangeError(`prepare: frame ${frame} is outside ${clip?.name ?? 'the clip'} [0, ${clip?.frameCount})`);
     const have = this._prepared.find((h) => h.clip === clip && h.frame === frame);
     if (have) return have.promise;
-    const h = { kind: 'Prepared', clip, frame, bridgeFrames: bridge ?? (floor === this.floor ? this.bridgeFramesFor(clip, frame) : bridgeFrames(clip, frame, floor)), bytes: 0, ready: false, consumed: false, error: null, _bridge: null, release: () => this.release(h) };
+    const h = { kind: 'Prepared', clip, frame, bridgeFrames: bridge ?? (tr ? this._transitionBridgeFrames(clip, frame, tr, floor) : floor === this.floor ? this.bridgeFramesFor(clip, frame) : bridgeFrames(clip, frame, floor)), bytes: 0, ready: false, consumed: false, error: null, _bridge: null, release: () => this.release(h) };
     this._prepared.push(h);
     h.promise = this._build(h).then(() => h, (e) => { h.error = e; this._forget(h); throw e; });
     return h.promise;
@@ -299,6 +315,10 @@ export class Player extends EventTarget {
     this.stats.bridges = this._prepared.filter((x) => x.ready).length;
     this._account();
   }
+  /** Whether `clip` is playing, about to, or on screen in a transition — what a page must not let go of. */
+  uses(clip) { return [this._segment, this._next, this._transition?.out].some((s) => s && s.clip === clip) || this._pendingStart?.clip === clip || this._deferred?.clip === clip; }
+  /** Let go of what is held for `clip` outside playback: its prepared bridges and its audio windows. */
+  forgetClip(clip) { for (const h of this._prepared.slice()) if (h.clip === clip) this.release(h); this.audio.release(clip); }
   /** Drop a prepared target and its memory. */
   release(h) { if (this._forget(h)) { h._bridge?.close(); h._bridge = null; } }
   releaseAll() { for (const h of this._prepared.slice()) this.release(h); }
@@ -314,23 +334,26 @@ export class Player extends EventTarget {
    * while the decoder re-targets behind it), else as soon as the device decodes it. `target` is a
    * Clip or a Prepared handle (then `frame` is the handle's). A bridge still being built is waited
    * for; the cut lands the moment it is ready.
-   * @param {{from?: number, to?: number, loop?: boolean, bridge?: boolean}} opts  the range to play from there: [from, to), default [frame, end); bridge: force or forbid a loop's wrap bridge
+   * @param {{from?: number, to?: number, loop?: boolean, bridge?: boolean, transition?: any}} opts  the range to play from there: [from, to), default [frame, end); bridge: force or forbid a loop's wrap bridge;
+   *   transition: a swipe or a crossfade instead of a hard cut (see normalizeTransition) — the outgoing clip keeps playing through it when
+   *   its decoder can stay (a cold cut, or a target prepared with the same transition), else it holds its last frame; the audio crossfades
    */
   cut(target, frame, opts = {}) {
     this.resume();
     const { clip, frame: f } = Player._unpack(target, frame);
     if (!clip) throw new TypeError('cut: no target');
+    normalizeTransition(opts.transition);   // a wrong spec throws here, not later on the clock
     const h = this._handleFor(clip, f);
     this._cancelDeferred();
     if (h && !h.ready) {
-      const d = this._deferred = { cancelled: false };
+      const d = this._deferred = { cancelled: false, clip };
       const go = (handle) => { if (d.cancelled) return; this._deferred = null; this._cutNow(clip, f, opts, handle); };
       h.promise.then(() => go(h), () => go(null));
       return;
     }
     this._cutNow(clip, f, opts, h);
   }
-  _cutNow(clip, f, { from = f, to = clip.frameCount, loop = false, bridge } = {}, h) { this._schedule(clip, { from, to, loop, startIndex: f, bridge }, null, START_DELAY_SWITCH, h); }
+  _cutNow(clip, f, { from = f, to = clip.frameCount, loop = false, bridge, transition } = {}, h) { this._schedule(clip, { from, to, loop, startIndex: f, bridge, transition }, null, START_DELAY_SWITCH, h); }
 
   /**
    * After the current segment presents frame `at`, present `target`'s `frame` in the very next slot
@@ -343,7 +366,8 @@ export class Player extends EventTarget {
     if (!clip) throw new TypeError('cutAfter: no target');
     const h0 = this._handleFor(clip, f);
     const h = h0?.ready ? h0 : null;
-    const range = { from: opts.from ?? f, to: opts.to ?? clip.frameCount, loop: !!opts.loop, startIndex: f, bridge: opts.bridge };
+    normalizeTransition(opts.transition);
+    const range = { from: opts.from ?? f, to: opts.to ?? clip.frameCount, loop: !!opts.loop, startIndex: f, bridge: opts.bridge, transition: opts.transition };
     const seg = this._next ?? this._segment;
     if (!seg) { this.resume(); this._cancelDeferred(); this._schedule(clip, range, null, START_DELAY_PLAY, h); return this._clock() + START_DELAY_PLAY; }
     this._cancelDeferred();
@@ -369,7 +393,8 @@ export class Player extends EventTarget {
     this._next = null;
     const seg = this._segment;
     if (seg?.audio && seg.audioStopped) {
-      // the current segment's audio was told to stop at the boundary: pick it up again from there
+      // the current segment's audio was told to stop at the boundary: pick it up again from there (a crossfade's fade-out is dropped and it starts again now)
+      if (seg.audioFaded) { seg.audio.dispose(); seg.audioStopAt = t; seg.audioFaded = false; }
       const at = seg.audioStopAt;
       const where = this._pAt(seg, Math.max(at, t));
       seg.audio = this.audio.createSegment({ clip: seg.clip, from: seg.from, to: seg.to, loop: seg.loop, startIndex: this._indexForP(seg, where ? where.p : 0), tStart: Math.max(at, t), rate: this._rate, ctxTime: (x) => this._ctxTime(x) });
@@ -384,6 +409,12 @@ export class Player extends EventTarget {
     this._cancelDeferred();
     if (this._pendingStart) { this._pendingStart.cancelled = true; this._pendingStart = null; }
     const t = this._clock();
+    const tr = this._transition;
+    if (tr) {   // the screen keeps the incoming clip's frame, at its own size, not a half-finished swipe
+      this._transition = null;
+      this._stopAudioAt(tr.out, t); this._closeSource(tr.out.source); tr.out.source = null; this._retire(tr.out, this._segment);
+      if (this._segment?.held) this.draw(this._segment.held, this._segment.clip.rotation);
+    }
     if (this._next) this._dispose(this._next, t);
     if (this._segment) this._dispose(this._segment, t);
     this._next = this._segment = null;
@@ -440,19 +471,22 @@ export class Player extends EventTarget {
    * seg.t0 is the player time of p = 0 (frame `from`), so the frame at time t follows from the clip's frame times.
    * With a Prepared handle `h`, the segment starts on the bridge and the decoder takes over at the bridge's end.
    */
-  _schedule(clip, { from = 0, to = clip.frameCount, loop = false, startIndex = from, bridge: bridgeOverride }, tStart, minDelay, h) {
+  _schedule(clip, { from = 0, to = clip.frameCount, loop = false, startIndex = from, bridge: bridgeOverride, transition }, tStart, minDelay, h) {
+    const tr = normalizeTransition(transition);
     if (!(from >= 0 && to <= clip.frameCount && from < to)) throw new RangeError(`bad range [${from}, ${to})`);
     if (!(startIndex >= from && startIndex < to)) throw new RangeError(`startIndex ${startIndex} outside [${from}, ${to})`);
     const len = to - from, pStart = startIndex - from;
     const wantBridge = loop && this._needsWrapBridge(clip, from, bridgeOverride);
     const indexForP = (p) => (loop ? from + ((p % len) + len) % len : Math.min(from + Math.max(0, p), to - 1));
     if (this._pendingStart) { this._pendingStart.cancelled = true; this._pendingStart = null; }
-    let source, standby = null, swap = null, nextPassP = 0, retarget = false, loopBridgeSeed = null;
+    let source, standby = null, swap = null, nextPassP = 0, retarget = false, loopBridgeSeed = null, deferRetarget = false;
     if (h) {
       // the bridge plays first; the decoder that is playing re-targets at the takeover (_tick), or a fresh one starts now when nothing plays.
-      // A cut to a loop's own start keeps the bridge: it is the wrap bridge from then on.
+      // A cut to a loop's own start keeps the bridge when the loop needs one: it is the wrap bridge from then on.
       this._forget(h); h.consumed = true;
-      const keep = loop && h.frame === from;
+      const keep = wantBridge && h.frame === from;
+      // a transition: the outgoing clip keeps its decoder through it when the bridge also covers a re-target from the transition's end
+      deferRetarget = !!tr && h._bridge.count >= this._transitionBridgeFrames(clip, startIndex, tr);
       source = new BridgeSource(h._bridge, { keep });
       if (keep) loopBridgeSeed = h._bridge;
       h._bridge = null;
@@ -475,7 +509,7 @@ export class Player extends EventTarget {
       audioReady = () => ca.windowReady(wi) !== null || ca.mode === 'whole';
     }
     const link = {};
-    const seg = { from, to, loop, startIndex, len, source, standby, swap, nextPassP, nextWrapP: (Math.floor(pStart / len) + 1) * len, retarget, indexForP, link, wantBridge, loopBridge: null, loopBridgeSeed, bridgePass: Infinity, allBridge: false, pendingBridge: null, rebuilding: false,
+    const seg = { from, to, loop, startIndex, len, source, standby, swap, nextPassP, nextWrapP: (Math.floor(pStart / len) + 1) * len, retarget, deferRetarget, transition: tr, held: null, indexForP, link, wantBridge, loopBridge: null, loopBridgeSeed, bridgePass: Infinity, allBridge: false, pendingBridge: null, rebuilding: false,
       watch: h && retarget ? { startP: pStart, n: source.bridge.count, readyP: null } : null, after: null };   // watch: a re-targeted decoder behind this bridge is observed; one started while nothing played is not representative
     if (wantBridge && !loopBridgeSeed) this._buildLoopBridge(clip, from, len, link);
 
@@ -483,7 +517,7 @@ export class Player extends EventTarget {
     // decoded) — a cold hardware decoder's start-up is waited out, never dropped through. A bridge or a cut needs one frame.
     const need = h || minDelay === START_DELAY_SWITCH ? 1 : Math.min(3, this.lookahead);
     if (tStart == null && (source.queued < need || !audioReady())) {
-      const pending = { cancelled: false };
+      const pending = { cancelled: false, clip };
       this._pendingStart = pending;
       const t0 = performance.now();
       // Nothing is playing: the start frame goes on screen the moment the decoder has it and is held until the clock
@@ -542,20 +576,22 @@ export class Player extends EventTarget {
     const startOffset = clip.frameTime(s.startIndex) - clip.frameTime(s.from);
     const t0 = tStart - startOffset / this._rate;
     const seg = { clip, ...s, length: s.len, tStart, t0, startOffset, period, lastP: s.startIndex - s.from - 1, lastIndex: -1, pass: 0, stallP: -1, endedFired: false, audio: null, audioStopped: false, audioStopAt: 0, recoveries: 0 };
+    const fade = s.transition && this._segment ? s.transition.seconds : 0;   // a transition from something playing: the audio crossfades over it
     if (clip.audio) {
-      seg.audio = this.audio.createSegment({ clip, from: s.from, to: s.to, loop: s.loop, startIndex: s.startIndex, tStart, rate: this._rate, ctxTime: (t) => this._ctxTime(t) });
+      seg.audio = this.audio.createSegment({ clip, from: s.from, to: s.to, loop: s.loop, startIndex: s.startIndex, tStart, rate: this._rate, fadeIn: fade, ctxTime: (t) => this._ctxTime(t) });
       seg.audio.ensure(tStart + this.audio.aheadSeconds).catch((e) => this._emitError(e, clip, true));
       if (this.audioContext.state !== 'running' && !this.muted && this._blockedFor !== clip) { this._blockedFor = clip; this.dispatchEvent(Object.assign(new Event('blocked'), { clip })); }
     }
     if (this._next) this._dispose(this._next, tStart);    // replaced before it ever started
-    if (this._segment) this._stopAudioAt(this._segment, tStart);
+    if (this._segment) this._stopAudioAt(this._segment, tStart, fade);
     this._next = seg;
     if (seg.link.bridge) { const b = seg.link.bridge; seg.link.bridge = null; this._attachLoopBridge(seg, b); }   // a wrap bridge that finished first
     if (!this._raf) this._raf = requestAnimationFrame(this._tick);
   }
 
-  _stopAudioAt(seg, t) { if (!seg.audio || seg.audioStopped) return; seg.audioStopped = true; seg.audioStopAt = t; seg.audio.stopAt(t); }
-  _dispose(seg, t) { this._stopAudioAt(seg, t); this._closeSource(seg.source); this._closeSource(seg.standby); seg.loopBridge?.close(); seg.loopBridge = null; seg.loopBridgeSeed?.close(); seg.loopBridgeSeed = null; seg.pendingBridge?.bridge.close(); seg.pendingBridge = null; seg.link.bridge?.close(); seg.link.bridge = null; seg.link.dead = true; seg.clip.pinRange(null); this._account(); }
+  /** Stop a segment's audio at t; with `fade`, it fades out over [t, t + fade] (the outgoing half of a crossfade). */
+  _stopAudioAt(seg, t, fade = 0) { if (!seg.audio || seg.audioStopped) return; seg.audioStopped = true; seg.audioStopAt = t + fade; seg.audioFaded = fade > 0; seg.audio.stopAt(t + fade, fade > 0 ? { fadeFrom: t } : undefined); }
+  _dispose(seg, t) { this._stopAudioAt(seg, t); seg.held?.close(); seg.held = null; this._closeSource(seg.source); this._closeSource(seg.standby); seg.loopBridge?.close(); seg.loopBridge = null; seg.loopBridgeSeed?.close(); seg.loopBridgeSeed = null; seg.pendingBridge?.bridge.close(); seg.pendingBridge = null; seg.link.bridge?.close(); seg.link.bridge = null; seg.link.dead = true; seg.clip.pinRange(null); this._account(); }
 
   /** Presentation index for presentation number p of a segment. */
   _indexForP(seg, p) { return seg.loop ? seg.from + ((p % seg.length) + seg.length) % seg.length : Math.min(seg.from + Math.max(0, p), seg.to - 1); }
@@ -571,6 +607,12 @@ export class Player extends EventTarget {
   }
 
   _onSourceError(source, e) {
+    const tr = this._transition;
+    if (tr && (tr.out.source === source || tr.out.standby === source)) {   // the outgoing clip of a transition: it holds its last frame for the rest of it
+      this._closeSource(source);
+      if (tr.out.source === source) { tr.out.source = null; tr.live = false; } else tr.out.standby = null;
+      return;
+    }
     for (const seg of [this._segment, this._next]) {
       if (!seg) continue;
       if (seg.source !== source && seg.standby !== source) continue;
@@ -633,76 +675,138 @@ export class Player extends EventTarget {
     this.stats.clock = this._wall ? 'wall' : 'audio';
 
     if (this._next && now >= this._next.tStart) {
+      this._endTransition();   // a transition still running ends here: its outgoing clip goes, its re-target happens
       const old = this._segment;
       const s = this._segment = this._next;
       this._next = null;
       if (old) {
-        if (s.retarget) {
-          // the decoder that played the old clip is re-targeted to the new one behind the bridge; a worker source, or a dead one, is replaced
-          s.retarget = false;
-          const reuse = old.source instanceof FrameSource && !old.source.error;
-          let dec = null;
-          try {
-            if (reuse) { dec = old.source; dec.retarget(s.clip); }
-            else { this._closeSource(old.source); dec = this._newSource(s.clip); }
-            this._startDecoder(dec, { from: s.from, to: s.to, loop: s.loop, startIndex: s.indexForP(s.nextPassP), pStart: s.nextPassP }, s.length);
-            s.standby = dec;
-            if (s.watch) s.watch.startP = s.lastP + 1;   // the clock on the bridge starts now
-          } catch (e) { this._closeSource(dec); if (reuse) this._decoders.delete(old.source); s.standby = null; this._emitError(e, s.clip, false); }
-        } else this._closeSource(old.source);
-        this._closeSource(old.standby);
-        old.loopBridge?.close(); old.loopBridge = null; old.loopBridgeSeed?.close(); old.loopBridgeSeed = null; old.pendingBridge?.bridge.close(); old.pendingBridge = null; old.link.dead = true;
-        if (old.clip !== s.clip) old.clip.pinRange(null);   // audio already told to stop at tStart
+        if (s.transition && (old.held || old.source)) {
+          // The outgoing clip stays on screen through the transition: still moving when it keeps its decoder (a cold cut has its
+          // own; a bridged one waits for the transition's end when the bridge covers it), else holding its last frame.
+          if (s.retarget && !s.deferRetarget) this._retargetInto(old, s);
+          this._transition = { out: old, live: !!old.source && !old.source.error, t0: s.tStart, t1: s.tStart + s.transition.seconds, spec: s.transition, fit: null };
+        } else {
+          if (s.retarget) this._retargetInto(old, s);
+          else this._closeSource(old.source);
+          old.source = null;
+          this._retire(old, s);
+        }
         this._account();
       }
       this.dispatchEvent(Object.assign(new Event('segmentstart'), { clip: s.clip, from: s.from, to: s.to, loop: s.loop, tStart: s.tStart }));
-      this.dispatchEvent(Object.assign(new Event('switch'), { fromClip: old?.clip ?? null, fromFrame: old ? old.lastIndex : -1, toClip: s.clip, toFrame: s.startIndex }));
+      this.dispatchEvent(Object.assign(new Event('switch'), { fromClip: old?.clip ?? null, fromFrame: old ? old.lastIndex : -1, toClip: s.clip, toFrame: s.startIndex, transition: this._transition ? s.transition.type : null }));
     }
+    if (this._transition && now >= this._transition.t1) this._endTransition();
 
     const seg = this._segment;
     if (!seg) { if (this._next) this._raf = requestAnimationFrame(this._tick); return; }
-    const c = seg.clip;
-    const at = this._pAt(seg, now);
-    if (at) {
-      const { p } = at;
-      if (at.over && !seg.endedFired) { seg.endedFired = true; this.dispatchEvent(Object.assign(new Event('ended'), { clip: c })); }
-      if (at.pass > seg.pass) { seg.pass = at.pass; this.dispatchEvent(Object.assign(new Event('loop'), { clip: c, pass: at.pass })); }
-
-      // the swaps: on a bridge, the decoder behind it takes over at the bridge's end; on the decoder, a loop's wrap goes onto the bridge
-      if (seg.swap === 'bridge') {
-        if (seg.watch && seg.watch.readyP == null && seg.standby && seg.standby.queued > 0) seg.watch.readyP = p;   // the decoder is ready: this many bridge frames were needed
-        if (p >= seg.nextPassP) { this._handoff(seg, p); if (this._segment !== seg) { this._raf = requestAnimationFrame(this._tick); return; } }
-      } else if (seg.loop && p >= seg.nextWrapP) {
-        const k = Math.floor(p / seg.length);
-        seg.nextWrapP = (k + 1) * seg.length;
-        if (seg.loopBridge && (seg.allBridge || k >= seg.bridgePass)) this._wrapOntoBridge(seg, k);
-      }
-      const src = seg.source;
-      if (p !== seg.lastP) {
-        // Fell far behind (tab hidden, decoder hiccup): skip ahead instead of decoding every frame.
-        if (p - src.nextP > c.gop && !src.ended && !seg.swap && !src.isBridge) src.reseek(this._indexForP(seg, p), p);
-        this.stats.dropped += src.dropBefore(p);
-        const item = src.peek();
-        if (item && item.p === p) {
-          src.shift();
-          this.draw(item.frame, c.rotation);
-          item.frame.close();
-          seg.lastP = p; seg.lastIndex = item.index;
-          this.stats.rendered++;
-          this.stats.index = item.index;
-          this.stats.p = p;
-          this.dispatchEvent(Object.assign(new Event('frame'), { clip: c, index: item.index, p }));
-          if (seg.after) { const a = seg.after; seg.after = null; this._observe(seg, a.n, { used: a.used, late: a.stalls }); }   // the first frame after a hand-off closes the book on it
-        } else if (seg.stallP !== p) {
-          seg.stallP = p;
-          this.stats.stalls++;
-          if (seg.after && p < seg.after.p + seg.after.n) seg.after.stalls++;   // late slots right after a hand-off: the bridge was short by this much
-          this.dispatchEvent(Object.assign(new Event('stall'), { clip: c, p }));
-        }
-      }
+    this._advance(seg, now, true);
+    if (this._segment !== seg) { this._raf = requestAnimationFrame(this._tick); return; }
+    const tr = this._transition;
+    if (tr) {
+      if (tr.live) this._advance(tr.out, now, false);
+      this._compose(tr, now);
     }
-    if (seg.audio && !seg.audioStopped) seg.audio.ensure(now + this.audio.aheadSeconds).catch((e) => this._emitError(e, c, true));
+    if (seg.audio && !seg.audioStopped) seg.audio.ensure(now + this.audio.aheadSeconds).catch((e) => this._emitError(e, seg.clip, true));
     if (this._next?.audio && !this._next.audioStopped) this._next.audio.ensure(now + this.audio.aheadSeconds).catch((e) => this._emitError(e, this._next.clip, true));
     this._raf = requestAnimationFrame(this._tick);
+  }
+
+  /**
+   * Move a segment to the frame due at `now`: its swaps (a bridge's hand-off, a loop's wrap onto its bridge), then the frame itself,
+   * kept as seg.held. The current segment draws it (unless a transition composites), counts it and says so; the outgoing segment
+   * of a transition only keeps moving.
+   */
+  _advance(seg, now, current) {
+    const c = seg.clip;
+    const at = this._pAt(seg, now);
+    if (!at) return;
+    const { p } = at;
+    if (current && at.over && !seg.endedFired) { seg.endedFired = true; this.dispatchEvent(Object.assign(new Event('ended'), { clip: c })); }
+    if (at.pass > seg.pass) { seg.pass = at.pass; if (current) this.dispatchEvent(Object.assign(new Event('loop'), { clip: c, pass: at.pass })); }
+
+    // the swaps: on a bridge, the decoder behind it takes over at the bridge's end; on the decoder, a loop's wrap goes onto the bridge
+    if (seg.swap === 'bridge') {
+      if (seg.watch && seg.watch.readyP == null && seg.standby && seg.standby.queued > 0) seg.watch.readyP = p;   // the decoder is ready: this many bridge frames were needed
+      if (p >= seg.nextPassP) {
+        if (!current && !seg.standby) return;   // an outgoing clip whose bridge ran out: it holds its last frame
+        this._handoff(seg, p);
+        if (current && this._segment !== seg) return;
+      }
+    } else if (seg.loop && p >= seg.nextWrapP) {
+      const k = Math.floor(p / seg.length);
+      seg.nextWrapP = (k + 1) * seg.length;
+      if (seg.loopBridge && (seg.allBridge || k >= seg.bridgePass)) this._wrapOntoBridge(seg, k);
+    }
+    const src = seg.source;
+    if (!src || p === seg.lastP) return;
+    // Fell far behind (tab hidden, decoder hiccup): skip ahead instead of decoding every frame.
+    if (p - src.nextP > c.gop && !src.ended && !seg.swap && !src.isBridge) src.reseek(this._indexForP(seg, p), p);
+    const dropped = src.dropBefore(p);
+    if (current) this.stats.dropped += dropped;
+    const item = src.peek();
+    if (item && item.p === p) {
+      src.shift();
+      seg.held?.close();
+      seg.held = item.frame;   // kept: a transition composites the latest frame of each clip on every display frame
+      if (current && !this._transition) this.draw(item.frame, c.rotation);
+      seg.lastP = p; seg.lastIndex = item.index;
+      if (!current) return;
+      this.stats.rendered++;
+      this.stats.index = item.index;
+      this.stats.p = p;
+      this.dispatchEvent(Object.assign(new Event('frame'), { clip: c, index: item.index, p }));
+      if (seg.after) { const a = seg.after; seg.after = null; this._observe(seg, a.n, { used: a.used, late: a.stalls }); }   // the first frame after a hand-off closes the book on it
+    } else if (current && seg.stallP !== p) {
+      seg.stallP = p;
+      this.stats.stalls++;
+      if (seg.after && p < seg.after.p + seg.after.n) seg.after.stalls++;   // late slots right after a hand-off: the bridge was short by this much
+      this.dispatchEvent(Object.assign(new Event('stall'), { clip: c, p }));
+    }
+  }
+
+  /** The decoder that played `old` re-targets to `s`'s clip behind `s`'s bridge (a worker source, or a dead one, is replaced). */
+  _retargetInto(old, s) {
+    s.retarget = false;
+    const src0 = old.source;
+    const reuse = src0 instanceof FrameSource && !src0.error;
+    let dec = null;
+    try {
+      if (reuse) { dec = src0; dec.retarget(s.clip); }
+      else { this._closeSource(src0); dec = this._newSource(s.clip); }
+      old.source = null;
+      this._startDecoder(dec, { from: s.from, to: s.to, loop: s.loop, startIndex: s.indexForP(s.nextPassP), pStart: s.nextPassP }, s.length);
+      s.standby = dec;
+      if (s.watch) s.watch.startP = s.lastP + 1;   // the clock on the bridge starts now
+    } catch (e) { this._closeSource(dec); if (reuse) this._decoders.delete(src0); old.source = null; s.standby = null; this._emitError(e, s.clip, false); }
+  }
+  /** What a replaced segment still holds goes (its decoder is closed or re-targeted by the caller); `s` is what replaced it. */
+  _retire(old, s) {
+    this._closeSource(old.standby); old.standby = null;
+    old.held?.close(); old.held = null;
+    old.loopBridge?.close(); old.loopBridge = null; old.loopBridgeSeed?.close(); old.loopBridgeSeed = null; old.pendingBridge?.bridge.close(); old.pendingBridge = null; old.link.dead = true;
+    if (!s || old.clip !== s.clip) old.clip.pinRange(null);   // its audio was already told to stop
+  }
+  /** A transition is over: the outgoing clip goes (its decoder, when it kept one for the transition, re-targets to the new clip now). */
+  _endTransition() {
+    const tr = this._transition;
+    if (!tr) return;
+    this._transition = null;
+    const s = this._segment, old = tr.out;
+    if (s && s.retarget) this._retargetInto(old, s);
+    else this._closeSource(old.source);
+    old.source = null;
+    this._retire(old, s);
+    if (s?.held) this.draw(s.held, s.clip.rotation);   // back to drawing at the frame's own size: the box shows it the same way
+    this._account();
+  }
+  /** One display frame of a transition: both clips' latest frames, placed in the element's box and faded or offset by the eased progress. */
+  _compose(tr, now) {
+    const q = Math.min(1, Math.max(0, (now - tr.t0) / (tr.t1 - tr.t0)));
+    tr.fit ??= fitOf(this.canvas);
+    const out = tr.out.held ? { frame: tr.out.held, rotation: tr.out.clip.rotation } : null;
+    const inc = this._segment?.held ? { frame: this._segment.held, rotation: this._segment.clip.rotation } : null;
+    composeTransition(this.ctx, this.canvas, out, inc, tr.spec, tr.spec.easing(q), tr.fit);
+    this.painted = true;
   }
 }

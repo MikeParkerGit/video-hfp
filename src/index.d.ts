@@ -84,7 +84,16 @@ export interface StallEvent extends Event { clip: Clip; p: number }
 export interface PlayerErrorEvent extends Event { error: Error; clip: Clip; recovered: boolean }
 export interface BlockedEvent extends Event { clip: Clip }
 export interface PlayRange { from?: number; to?: number; loop?: boolean; startIndex?: number; /** force or forbid a loop's wrap bridge; default: structural (lead-in longer than the lookahead) */ bridge?: boolean }
-export interface CutRange { from?: number; to?: number; loop?: boolean; bridge?: boolean }
+/**
+ * A transition instead of a hard cut: 'fade' (a crossfade), 'swipe' / 'swipe-left' | 'swipe-right' | 'swipe-up' | 'swipe-down' (the picture
+ * moves that way: 'left' brings the new clip in from the right), a number (a fade of that many ms), or an object. Defaults: a fade 300 ms
+ * ease-in-out, a swipe 350 ms ease-out. The audio crossfades (equal power) over the same span.
+ */
+export type TransitionSpec = 'fade' | 'swipe' | 'swipe-left' | 'swipe-right' | 'swipe-up' | 'swipe-down' | number
+  | { type: 'fade' | 'swipe'; direction?: 'left' | 'right' | 'up' | 'down'; duration?: number; easing?: 'linear' | 'ease-in' | 'ease-out' | 'ease-in-out' | ((t: number) => number) };
+export interface CutRange { from?: number; to?: number; loop?: boolean; bridge?: boolean; transition?: TransitionSpec }
+export interface PrepareOptions { bridge?: number; floor?: HardwareProfile; /** the transition the cut will use: the bridge then carries it, so the outgoing clip keeps moving */ transition?: TransitionSpec }
+export function normalizeTransition(t: TransitionSpec | null | undefined | false): { type: 'fade' | 'swipe'; direction: 'left' | 'right' | 'up' | 'down' | null; duration: number; seconds: number; easing: (t: number) => number } | null;
 
 /** A prepared target: a bridge of raw frames from `frame` on, and no decoder. cut() consumes it; release() drops it. */
 export interface Prepared {
@@ -113,8 +122,11 @@ export class Player extends EventTarget {
   resume(): Promise<void>;
   play(clip: Clip, opts?: PlayRange): void;
   /** Build a bridge for clip's frame (and fetch the hand-off bytes, warm the audio window). The same clip and frame twice is the same handle. */
-  prepare(clip: Clip, frame: number, opts?: { bridge?: number; floor?: HardwareProfile }): Promise<Prepared>;
-  prepare(targets: { clip: Clip; frame: number; bridge?: number }[], frame?: undefined, opts?: { bridge?: number; floor?: HardwareProfile }): Promise<Prepared[]>;
+  prepare(clip: Clip, frame: number, opts?: PrepareOptions): Promise<Prepared>;
+  prepare(targets: { clip: Clip; frame: number; bridge?: number; transition?: TransitionSpec }[], frame?: undefined, opts?: PrepareOptions): Promise<Prepared[]>;
+  /** A cut's transition is on screen. */ readonly transitioning: boolean;
+  /** Whether `clip` is playing, about to, or on screen in a transition. */ uses(clip: Clip): boolean;
+  /** Release `clip`'s prepared bridges and audio windows. */ forgetClip(clip: Clip): void;
   release(handle: Prepared): void; releaseAll(): void;
   /** How many frames a bridge into clip at frame would hold on this player's floor. */ bridgeFramesFor(clip: Clip, frame: number): number;
   /** Size bridges from this device: the origin's stored profile, or a measurement with the clip (nothing playing; `force` re-measures). Resolves to the profile; fires 'optimized'. */ optimize(clip: Clip | null, opts?: { force?: boolean; maxDecoders?: number; frames?: number; cache?: boolean; stepTimeoutMs?: number; onProgress?: (stage: string) => void }): Promise<HardwareProfile>;
@@ -209,8 +221,13 @@ export class VideoHFP extends HTMLElement {
   open(src: string | Blob, opts?: { name?: string; stream?: boolean | 'auto'; windowBytes?: number; budgetBytes?: number; onProgress?: (stage: string) => void }): Promise<Clip>;
   seek(frame: number): void;
   /** loop [from, to) of the current clip, starting now (also `loop_`) */ loopRange(from: number, to: number): Promise<void>; loop_(from: number, to: number): Promise<void>;
-  prepare(target: ClipTarget, frame: number, opts?: { bridge?: number; floor?: HardwareProfile }): Promise<Prepared>;
-  prepare(targets: { clip: ClipTarget; frame: number; bridge?: number }[], frame?: undefined, opts?: { bridge?: number; floor?: HardwareProfile }): Promise<Prepared[]>;
+  prepare(target: ClipTarget, frame: number, opts?: PrepareOptions): Promise<Prepared>;
+  prepare(targets: { clip: ClipTarget; frame: number; bridge?: number; transition?: TransitionSpec }[], frame?: undefined, opts?: PrepareOptions): Promise<Prepared[]>;
+  /** Make `target`'s `frame` the paused position without playing (the frame is shown; play() starts there). */
+  cue(target: ClipTarget, frame?: number, opts?: { from?: number; to?: number; loop?: boolean }): Promise<void>;
+  /** Let go of a clip opened with open() (bridges, audio windows, cached bytes); false while it is playing, cued, or the element's src. */
+  forget(target: ClipTarget): boolean;
+  /** A cut's transition is on screen. */ readonly transitioning: boolean;
   release(handle: Prepared): void; releaseAll(): void;
   cut(target: ClipTarget, frame: number, opts?: CutRange): void;
   cutAfter(at: number, target: ClipTarget, frame: number, opts?: CutRange): number;

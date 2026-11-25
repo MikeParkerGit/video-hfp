@@ -1,0 +1,130 @@
+<!doctype html><meta charset="utf-8"><title>video-hfp — transitions</title>
+<style>body{background:#111;color:#ddd;font:14px system-ui}video-hfp{width:640px;height:360px;object-fit:contain}pre{font:12px ui-monospace,monospace;white-space:pre-wrap}</style>
+<!-- the playback suite drives this page (test/playback.mjs runTransitions); it can also be watched: ?a=A.mp4&b=B.mp4&rot=A-rot.mp4 -->
+<video-hfp id="v" muted></video-hfp>
+<pre id="out">…</pre>
+<script type="module">
+import '../src/element.js';
+const q = new URLSearchParams(location.search);
+const v = document.getElementById('v');
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const A = await v.open(`clips/${q.get('a') || 'A.mp4'}`, { name: 'A' });
+const B = await v.open(`clips/${q.get('b') || 'B.mp4'}`, { name: 'B' });
+const R = q.get('rot') ? await v.open(`clips/${q.get('rot')}`, { name: 'R' }) : null;
+const e = v.engine;
+const probe = window.__probe = { done: false };
+
+// every display frame while recording: the transition's state, the outgoing and incoming frame, draws on the canvas, its size, decoders, gains
+let draws = 0;
+const drawImage = e.ctx.drawImage.bind(e.ctx);
+e.ctx.drawImage = (...a) => { draws++; return drawImage(...a); };
+const snaps = probe.snaps = q.get('snap') ? [] : null;   // ?snap=1: the canvas halfway through each transition, as PNG data URLs
+const record = () => {
+  const rec = []; let on = true, snapped = false;
+  const tick = () => {
+    if (!on) return;
+    const tr = e._transition;
+    if (snaps && tr && !snapped && (e.now - tr.t0) / (tr.t1 - tr.t0) >= 0.5) { snapped = true; snaps.push(e.canvas.toDataURL('image/png')); }
+    rec.push({ t: performance.now(), tr: !!tr, live: tr ? tr.live : null, out: tr ? tr.out.lastIndex : null, inc: e.stats.index, draws, cw: e.canvas.width, ch: e.canvas.height, dec: e.stats.decoders,
+      outGain: tr?.out.audio ? tr.out.audio.gain.gain.value : null, inGain: e._segment?.audio ? e._segment.audio.gain.gain.value : null });
+    draws = 0;
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+  return () => { on = false; return rec; };
+};
+const frames = [];
+v.addEventListener('frame', (ev) => frames.push([ev.clip.name, ev.index]));
+const switches = [];
+v.addEventListener('switch', (ev) => switches.push({ from: ev.fromClip?.name ?? null, fromFrame: ev.fromFrame, to: ev.toClip.name, toFrame: ev.toFrame, transition: ev.transition }));
+const summary = (rec, mark, clipName) => {
+  const during = rec.filter((x) => x.tr);
+  const mid = during[Math.floor(during.length / 2)] || null;
+  const outs = during.map((x) => x.out);
+  const inc = frames.slice(mark).filter((f) => f[0] === clipName).map((f) => f[1]);
+  let gaps = 0, back = 0;
+  for (let i = 1; i < inc.length; i++) { if (inc[i] < inc[i - 1]) back++; else if (inc[i] > inc[i - 1] + 1) gaps++; }
+  const sorted = during.map((x) => x.draws).sort((a, b) => a - b);
+  return {
+    ms: during.length ? Math.round(during[during.length - 1].t - during[0].t) : 0,
+    ticks: during.length, live: during.length ? during.every((x) => x.live) : null,
+    outDistinct: new Set(outs).size, outFirst: outs[0] ?? null, outLast: outs[outs.length - 1] ?? null,
+    drawsPerTick: sorted[Math.floor(sorted.length / 2)] ?? 0,
+    maxDecoders: Math.max(0, ...during.map((x) => x.dec)),
+    canvasMid: mid ? [mid.cw, mid.ch] : null, gainsMid: mid ? [mid.outGain, mid.inGain] : null,
+    incFirst: inc[0] ?? null, incCount: inc.length, incGaps: gaps, incBack: back,
+  };
+};
+
+try {
+  // 1. a swipe onto a target prepared WITH the transition: the outgoing clip keeps playing through it on its own decoder, then that
+  //    decoder re-targets behind the bridge — one decoder throughout, both clips moving, the audio crossfading
+  await v.play({ clip: A, from: 0, to: A.frameCount, loop: true });
+  await sleep(1200);
+  const swipe = { type: 'swipe', direction: 'left', duration: 400 };
+  const h = await v.prepare(B, 438, { transition: swipe });
+  const plain = Math.max(5, (await v.prepare(B, 300)).bridgeFrames);
+  probe.swipe = { bridgeFrames: h.bridgeFrames, plainBridge: plain };
+  let mark = frames.length, stalls0 = e.stats.stalls, stop = record();
+  v.cut(h, 438, { transition: swipe });
+  await sleep(1300);
+  Object.assign(probe.swipe, summary(stop(), mark, 'B'), { stalls: e.stats.stalls - stalls0, decodersAfter: e.stats.decoders, transitioningAfter: v.transitioning, canvasAfter: [e.canvas.width, e.canvas.height] });
+
+  // 2. a crossfade with nothing prepared (a cold cut): the new clip starts its own decoder, the outgoing keeps its own until the end
+  mark = frames.length; stalls0 = e.stats.stalls; stop = record();
+  v.cut(A, 100, { transition: { type: 'fade', duration: 400 } });
+  await sleep(1400);
+  probe.coldFade = { ...summary(stop(), mark, 'A'), decodersAfter: e.stats.decoders };
+
+  // 3. a bridge too short for its transition (prepared without it): the outgoing decoder re-targets at once, so the outgoing frame holds still
+  const short = await v.prepare(B, 200);
+  mark = frames.length; stalls0 = e.stats.stalls; stop = record();
+  v.cut(short, 200, { transition: { type: 'fade', duration: 1000 } });
+  await sleep(1700);
+  probe.stillOut = { bridgeFrames: short.bridgeFrames, ...summary(stop(), mark, 'B'), stalls: e.stats.stalls - stalls0, decodersAfter: e.stats.decoders };
+
+  // 4. a portrait clip after a landscape one: both placed in the box during the transition, the portrait frame at its own size after
+  if (R) {
+    mark = frames.length; stop = record();
+    v.cut(R, 0, { transition: 'fade' });
+    await sleep(1200);
+    probe.shapes = { ...summary(stop(), mark, 'R'), canvasAfter: [e.canvas.width, e.canvas.height], videoSize: [v.videoWidth, v.videoHeight] };
+  }
+
+  // 5. a pause mid-transition: no half-finished swipe stays up — the incoming frame at its own size, nothing decoding
+  v.cut(B, 0, { transition: { type: 'swipe', direction: 'right', duration: 600 } });
+  for (let i = 0; i < 200 && !v.transitioning; i++) await sleep(5);
+  await sleep(150);
+  const wasTransitioning = v.transitioning;
+  v.pause();
+  await sleep(100);
+  probe.pause = { wasTransitioning, transitioningAfter: v.transitioning, canvas: [e.canvas.width, e.canvas.height], decoders: e.stats.decoders, paused: v.paused };
+
+  // 6. cutAfter with a transition: the switch comes after the boundary frame, and says it is a transition
+  await v.play({ clip: A, from: 0, to: A.frameCount, loop: true });
+  await sleep(500);
+  switches.length = 0;
+  const at = Math.min(A.frameCount - 2, v.currentFrame + 20);
+  v.cutAfter(at, B, 0, { transition: 'fade' });
+  await sleep(1500);
+  probe.cutAfter = { at, switch: switches.find((s) => s.to === 'B') ?? null };
+
+  // 7. a wrong spec throws at the call, not later on the clock
+  const err = (f) => { try { f(); return null; } catch (x) { return x.name; } };
+  probe.errors = { badType: err(() => v.cut(A, 0, { transition: 'wobble' })), badDirection: err(() => v.cut(A, 0, { transition: { type: 'swipe', direction: 'sideways' } })), badDuration: err(() => v.cut(A, 0, { transition: { type: 'fade', duration: 0 } })),
+    prepareBad: await v.prepare(A, 10, { transition: 'nope' }).then(() => null, (x) => x.name) };
+
+  // 8. cue() and forget(): a paused position without playing; a clip let go once nothing shows it
+  v.pause();
+  const durs = []; v.addEventListener('durationchange', () => durs.push(v.duration));
+  await v.cue(A, 50);
+  probe.cue = { paused: v.paused, frame: v.currentFrame, clip: v.clip?.name ?? null, durationchange: durs.length };
+  const keptWhileCued = v.forget(A);
+  await v.cue(B, 10);
+  const forgotten = v.forget(A);
+  const again = await v.open(`clips/${q.get('a') || 'A.mp4'}`);
+  probe.forget = { keptWhileCued, forgotten, reopenedFresh: again !== A, bridgesLeftForA: e.prepared.filter((x) => x.clip === A).length };
+} catch (x) { probe.error = String(x && x.stack || x); }
+probe.done = true;
+document.getElementById('out').textContent = JSON.stringify(probe, null, 1);
+</script>
