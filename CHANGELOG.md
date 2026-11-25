@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.0-beta.5 — 2026-11-24
+- **The start shows the frame it starts at.** A cold start waits for a few decoded frames and the first audio window before the clock runs; until then the canvas showed whatever was there — on a page with a `poster`, the poster, which is often cut from later in the clip. On a phone, where the wait is longest, that read as a later frame frozen, then the clip starting over ("7777777 then 1 2 3", Simon Movies on a Pixel, where the poster is cut at 10 % of the clip). Now the start frame goes up the moment the decoder has it and is held until the clock starts; a poster that loads after a video frame is up no longer covers it (`Player.painted`), and a one-frame decode (a paused seek, `preload="auto"`) that finishes after playback started no longer paints over it.
+- **A paused seek before the first play keeps the loop.** It used the whole clip, not looped, so a page that restored a position on `loadedmetadata` (a resume point) and then played got a clip that stopped at its end. It now keeps the element's own range (`loop`, `loop-start`, `loop-end`) when the frame is inside it. `preload="auto"` no longer warms frame 0 over a position a `loadedmetadata` listener has just sought.
+- The compat page proves the start frame is up ≥ 20 ms before the clock starts, the poster stays off it, and a seek-then-play loops; run against the previous code the first two and the loop fail.
+
 ## 0.2.0-beta.4 — 2026-10-25
 - **The controls bar on touch.** Lifting a finger fires `pointerleave`, which the bar took for a mouse moving away: while playing it hid the moment a tap ended, so a tap showed it for an instant and the controls could not be reached (found on a Pixel after a 10 s skip). Only a mouse leaving hides the bar at once now. A touch or a click anywhere on the bar is activity — it restarts the hide timer — where before the buttons swallowed the event before it reached the timer; the bar still keeps those events inside the element. The compat page taps, lifts and skips with touch pointer events, and proves the mouse behaviour is unchanged.
 

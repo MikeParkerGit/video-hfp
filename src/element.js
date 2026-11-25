@@ -313,9 +313,14 @@ export class VideoHFP extends HTMLElementBase {
     let from, to, loop, startIndex;
     if (explicit) { from = range.from ?? 0; to = range.to ?? clip.frameCount; loop = !!range.loop; startIndex = range.startIndex ?? from; }
     else if (this._pos && this._pos.clip === clip && !this._ended) { ({ from, to, loop } = this._pos); startIndex = this._pos.index; }
-    else { loop = this.loop; from = loop ? clampInt(this.loopStart, 0, clip.frameCount - 1) : 0; to = loop && this.loopEnd != null ? clampInt(this.loopEnd, from + 1, clip.frameCount) : clip.frameCount; startIndex = from; }
+    else { ({ from, to, loop } = this._attrRange(clip)); startIndex = from; }
     this._begin(clip, { from, to, loop, startIndex });
     engine.play(clip, { from, to, loop, startIndex });
+  }
+  /** What play() with no argument plays from the start: the whole clip, or [loop-start, loop-end) looped when `loop` is set. */
+  _attrRange(clip) {
+    const loop = this.loop, from = loop ? clampInt(this.loopStart, 0, clip.frameCount - 1) : 0;
+    return { from, to: loop && this.loopEnd != null ? clampInt(this.loopEnd, from + 1, clip.frameCount) : clip.frameCount, loop };
   }
   /** Loop [from, to) of the current (or main) clip, starting now. */
   loop_(from, to) { return this.play({ clip: this._currentClip() ?? undefined, from, to, loop: true }); }
@@ -343,7 +348,10 @@ export class VideoHFP extends HTMLElementBase {
       this._engine.play(clip, { from, to, loop, startIndex: frame });
       return;
     }
-    const base = this._pos && this._pos.clip === clip && frame >= this._pos.from && frame < this._pos.to ? this._pos : { clip, from: 0, to: clip.frameCount, loop: false };
+    // a seek before the first play keeps the element's own range (loop, loop-start, loop-end) when the frame is in it
+    const attr = { clip, ...this._attrRange(clip) };
+    const base = this._pos && this._pos.clip === clip && frame >= this._pos.from && frame < this._pos.to ? this._pos
+      : frame >= attr.from && frame < attr.to ? attr : { clip, from: 0, to: clip.frameCount, loop: false };
     this._pos = { ...base, index: frame };
     this._showFrame(clip, frame).then(() => { this._seeking = false; this._fire('timeupdate'); this._fire('seeked'); }, (e) => { this._seeking = false; this._fire('error', { error: e, clip }); });
   }
@@ -510,7 +518,7 @@ export class VideoHFP extends HTMLElementBase {
     if (!src) { this._mainPromise = null; this._networkState = 0; this._fire('emptied'); return; }
     if (!force && this.preload === 'none' && !this.autoplay) { this._mainPromise = null; this._networkState = 1; return; }
     this._networkState = 2; this._fire('loadstart');
-    if (this._engine && this._engine.rate !== this._defaultRate) this._engine.rate = this._defaultRate;
+    if (this._engine) { this._engine.painted = false; if (this._engine.rate !== this._defaultRate) this._engine.rate = this._defaultRate; }
     const p = this._mainPromise = this.open(src).then((clip) => {
       if (this._mainPromise !== p) return clip;
       this._main = clip; this._readyState = 1; this._networkState = 1;
@@ -518,7 +526,7 @@ export class VideoHFP extends HTMLElementBase {
       this._fire('durationchange'); this._fire('loadedmetadata');
       if (this._gone) return clip;   // removed while its index loaded: nothing starts, nothing decodes
       if (this.autoplay) this.play().catch(() => {});
-      else if (this.preload === 'auto') this._warm(clip);
+      else if (this.preload === 'auto' && !this._pos) this._warm(clip);   // a seek from a loadedmetadata listener shows its own frame
       return clip;
     }, (e) => { if (this._mainPromise === p) { this._networkState = 3; this._error = { code: 4, message: e.message, error: e }; this._fire('error', { error: e }); } throw e; });
     p.catch(() => {});
@@ -527,7 +535,7 @@ export class VideoHFP extends HTMLElementBase {
   /** Decode one frame (a one-frame bridge) and draw it: posters, paused seeks, preload=auto. */
   async _showFrame(clip, index) {
     const bridge = await buildBridge(clip, index, { count: 1 });
-    try { const f = bridge.frameAt(index); try { this.engine.draw(f, clip.rotation); } finally { f.close(); } } finally { bridge.close(); }
+    try { if (this._paused && this._engine) { const f = bridge.frameAt(index); try { this._engine.draw(f, clip.rotation); } finally { f.close(); } } } finally { bridge.close(); }   // playing by now: playback owns the canvas
     if (this._readyState < 2) this._readyState = 2;
     this._firstData(clip);
   }
@@ -576,9 +584,10 @@ export class VideoHFP extends HTMLElementBase {
   }
   _applyPoster() {
     const url = this.getAttribute('poster');
-    if (!url || this._readyState >= 2) return;
+    const covered = () => this._readyState >= 2 || !!this._engine?.painted;   // a video frame is up: the poster never covers it
+    if (!url || covered()) return;
     const img = new Image();
-    img.onload = () => { if (this._readyState >= 2) return; const e = this.engine; e.canvas.width = img.naturalWidth; e.canvas.height = img.naturalHeight; e.ctx.drawImage(img, 0, 0); };
+    img.onload = () => { if (covered()) return; const e = this.engine; e.canvas.width = img.naturalWidth; e.canvas.height = img.naturalHeight; e.ctx.drawImage(img, 0, 0); };
     img.src = url;
   }
   _scanChildren() {

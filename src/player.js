@@ -402,6 +402,7 @@ export class Player extends EventTarget {
 
   /** Draw one frame onto the canvas, turned by the clip's rotation (the element uses it for posters and paused seeks). */
   draw(frame, rotation = 0) {
+    this.painted = true;   // a video frame is on the canvas (the element's poster never covers one)
     const w = frame.displayWidth, h = frame.displayHeight;
     const cw = rotation % 180 ? h : w, ch = rotation % 180 ? w : h;   // the canvas is the upright size
     if (this.canvas.width !== cw || this.canvas.height !== ch) { this.canvas.width = cw; this.canvas.height = ch; }
@@ -485,9 +486,13 @@ export class Player extends EventTarget {
       const pending = { cancelled: false };
       this._pendingStart = pending;
       const t0 = performance.now();
+      // Nothing is playing: the start frame goes on screen the moment the decoder has it and is held until the clock
+      // starts, so the wait shows the frame playback begins at — not a poster cut from later in the clip, or black.
+      let shown = !!this._segment;
       const poll = () => {
         if (pending.cancelled) { if (this._pendingStart === pending) this._pendingStart = null; this._closeSource(source); this._closeSource(standby); link.dead = true; loopBridgeSeed?.close(); return; }
         if (source.error) { this._pendingStart = null; this._closeSource(standby); link.dead = true; loopBridgeSeed?.close(); return; }   // reported by _onSourceError
+        if (!shown && source.queued > 0) { shown = true; const it = source.peek(); if (it && it.p === pStart && !this._segment) this.draw(it.frame, clip.rotation); }
         if ((source.queued >= need && audioReady()) || performance.now() - t0 > MAX_START_WAIT_MS) { this._pendingStart = null; this._anchor(clip, seg, this._clock() + minDelay, minDelay); return; }
         setTimeout(poll, 4);
       };

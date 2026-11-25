@@ -246,6 +246,10 @@ async function runCompat() {
     const rm = r.removal || {};
     const rmOk = rm.moveKeepsPlaying && rm.pausedOnRemoval && rm.framesAfterRemoval === 0 && rm.contextState === 'closed' && rm.replays && rm.freshEngine && rm.pauseAbortsPlay === 'AbortError' && rm.pausedAfterAbort && rm.framesAfterAbort === 0;
     if (!rmOk) fail('removal', rm); else pass('removal', rm);
+    // the start: a paused seek before the first play keeps the loop range; the start frame is on screen before the clock starts; a late poster does not cover it
+    const sr = r.start || {};
+    const srOk = sr.seekFrame === 40 && sr.firstFrame === 40 && sr.loop === true && sr.range?.[0] === 30 && sr.range?.[1] === 60 && sr.wraps >= 1 && sr.startFrameLeadMs >= 20 && sr.readyStateAtFirstDraw < 2 && sr.canvasAfterPoster?.[0] === r.videoWidth;
+    if (!srOk) fail('start', sr); else pass('start', sr);
     if (r.rateWorks !== true || r.rateRange !== 'RangeError') fail('playbackRate', { rateWorks: r.rateWorks, rateRange: r.rateRange }); else pass('playbackRate', { setsAndReads: true, outOfRange: r.rateRange });
   } catch (e) { run.ok = verdict.ok = false; run.error = e.message; }
   run.consoleErrors = consoleErrors.splice(0);
