@@ -5,8 +5,10 @@
 // faststart file costs two small range requests; a file with its moov at the end costs one more.
 //
 // Boxes read: ftyp moov mvhd trak tkhd (the display matrix → rotation) edts/elst mdia mdhd hdlr minf stbl stsd (avc1 avc3 hvc1
-// hev1 vp09 av01 | mp4a Opus fLaC) stts ctts stss stsz stz2 stsc stco co64. Everything else is skipped.
+// hev1 vp09 av01 | mp4a Opus fLaC; colr — the colour space, a phone's full range) stts ctts stss stsz stz2 stsc stco co64.
+// Everything else is skipped.
 
+import { colorSpaceFromCodes } from '../color.js';
 const td = new TextDecoder();
 const fourcc = (b, o) => td.decode(b.subarray(o, o + 4));
 const u8 = (b, o) => b[o];
@@ -198,6 +200,13 @@ function videoEntry(b, entry) {
   const out = { format: entry.type, codedWidth: width, codedHeight: height, codec: null, description: undefined };
   const pasp = find('pasp');
   if (pasp) { const h = u32(b, pasp.start), v = u32(b, pasp.start + 4); if (h && v && h !== v) out.pixelAspect = h / v; }
+  // colr: 'nclx' (ISO) carries the full-range flag a phone sets; 'nclc' (QuickTime) the three codes only
+  const colr = find('colr');
+  if (colr && colr.end - colr.start >= 10) {
+    const kind = String.fromCharCode(b[colr.start], b[colr.start + 1], b[colr.start + 2], b[colr.start + 3]);
+    if (kind === 'nclx' || kind === 'nclc') out.colorSpace = colorSpaceFromCodes({ primaries: u16(b, colr.start + 4), transfer: u16(b, colr.start + 6), matrix: u16(b, colr.start + 8),
+      fullRange: kind === 'nclx' && colr.end - colr.start >= 11 ? (b[colr.start + 10] >> 7) === 1 : null });
+  }
   switch (entry.type) {
     case 'avc1': case 'avc3': { const c = find('avcC'); if (!c) return out; const d = b.subarray(c.start, c.end);
       out.codec = `avc1.${hex2(d[1])}${hex2(d[2])}${hex2(d[3])}`; out.description = d; break; }
@@ -206,6 +215,7 @@ function videoEntry(b, entry) {
     case 'vp09': case 'vp08': { const c = find('vpcC'); const d = c ? b.subarray(c.start, c.end) : null;
       // vpcC is a full box: version(1) flags(3) profile(1) level(1) bitDepth:4 chroma:3 range:1 ...
       const profile = d ? d[4] : 0, level = d ? d[5] : 10, bitDepth = d ? d[6] >> 4 : 8;
+      if (d && d.length >= 10 && !out.colorSpace) out.colorSpace = colorSpaceFromCodes({ primaries: d[7], transfer: d[8], matrix: d[9], fullRange: (d[6] & 1) === 1 });
       out.codec = entry.type === 'vp08' ? 'vp8' : `vp09.${String(profile).padStart(2, '0')}.${String(level).padStart(2, '0')}.${String(bitDepth).padStart(2, '0')}`; break; }
     case 'av01': { const c = find('av1C'); if (!c) return out; const d = b.subarray(c.start, c.end);
       const profile = d[1] >> 5, level = d[1] & 31, tier = d[2] >> 7, high = (d[2] >> 6) & 1, twelve = (d[2] >> 5) & 1;

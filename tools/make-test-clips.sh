@@ -30,4 +30,10 @@ wait
 # A-rot.mp4: A with a display matrix like a phone's portrait recording — a metadata-only copy, the samples are A's
 # (ffmpeg ≥ 5.1 for -display_rotation; an older ffmpeg leaves no A-rot and the tests skip it)
 ffmpeg -v error -display_rotation -90 -i demo/clips/A.mp4 -c copy -y demo/clips/A-rot.mp4 2>/dev/null || echo "ffmpeg has no -display_rotation; A-rot.mp4 skipped"
+# A-full.mp4 / A-full.webm: A's first 3 s the way a phone records it — FULL-range YUV (yuvj420p / color_range pc, BT.709 tags).
+# A bridge must keep the decoded frame's colour space, or full range is read as limited and the picture shifts at every hand-off.
+ffmpeg -v error -i demo/clips/A-src.mp4 -t 3 -vf "scale=out_range=full,format=yuvj420p" -c:v libx264 -preset veryfast -crf 16 -g 12 -bf 2 \
+  -color_range pc -colorspace bt709 -color_primaries bt709 -color_trc bt709 -movflags +write_colr -c:a aac -b:a 128k -y demo/clips/A-full.mp4
+ffmpeg -v error -i demo/clips/A-src.mp4 -t 3 -vf "scale=out_range=full,format=yuv420p" -c:v libvpx-vp9 -b:v 0 -crf 30 -g 12 -row-mt 1 -deadline realtime -cpu-used 8 \
+  -color_range pc -colorspace bt709 -color_primaries bt709 -color_trc bt709 -c:a libopus -b:a 96k -y demo/clips/A-full.webm
 ls -la demo/clips

@@ -19,6 +19,7 @@ import { plan } from '../src/plan.js';
 import { KNOWN_PROFILES, knownProfile, HARDWARE_FLOOR } from '../src/profiles.js';
 import { bridgeFrames, maxBridgeFrames, adjustBridge, MIN_BRIDGE_FRAMES } from '../src/bridge.js';
 import { normalizeTransition, transitionFrames } from '../src/transition.js';
+import { colorSpaceFromCodes } from '../src/color.js';
 import { syntheticClip } from '../src/plan.js';
 
 const clips = ['demo/clips/A.mp4', 'demo/clips/B.mp4', 'demo/clips/A-normal.mp4', 'demo/clips/A-vp9.webm', 'demo/clips/A-rot.mp4'].filter(existsSync);
@@ -179,5 +180,22 @@ console.log(`✓ plan: 6 prepared + 1-frame cold switch → phone limits: ${phon
   assert.equal(transitionFrames({ fps: 30 }, normalizeTransition({ type: 'fade', duration: 400 })), 12);
   assert.equal(transitionFrames({ fps: 60 }, normalizeTransition('swipe'), 2), 42);   // 350 ms of a 60 fps clip at 2×
   console.log('✓ transitions: \'fade\' 300 ms, \'swipe\' 350 ms left, a number is a fade; bad specs throw; 400 ms at 30 fps = 12 frames');
+}
+// colour space: a phone's colr (BT.709 ×3, full range) and the clips' container colour, given to every decoder
+{
+  assert.deepEqual(colorSpaceFromCodes({ primaries: 1, transfer: 1, matrix: 1, fullRange: true }), { primaries: 'bt709', transfer: 'bt709', matrix: 'bt709', fullRange: true });
+  assert.deepEqual(colorSpaceFromCodes({ primaries: 2, transfer: 2, matrix: 1, fullRange: true }), { matrix: 'bt709', fullRange: true });   // 2 = unspecified: left out
+  assert.deepEqual(colorSpaceFromCodes({ primaries: 9, transfer: 16, matrix: 9, fullRange: false }), { primaries: 'bt2020', transfer: 'pq', matrix: 'bt2020-ncl', fullRange: false });
+  assert.equal(colorSpaceFromCodes({}), null);
+  const got = [];
+  for (const f of ['demo/clips/A-full.mp4', 'demo/clips/A-full.webm']) {
+    if (!existsSync(f)) continue;
+    const c = await open(f);
+    assert.equal(c.colorSpace?.fullRange, true, `${f}: full range from the container`);
+    assert.equal(c.decoderConfig().colorSpace?.fullRange, true, `${f}: every decoder is told`);
+    got.push(f.split('/').pop());
+  }
+  assert.equal((await open('demo/clips/A.mp4')).decoderConfig().colorSpace, undefined, 'no colour in the container: the decoder reads the bitstream');
+  console.log(`✓ colour: H.273 codes → WebCodecs names; full range read from ${got.join(' and ') || '(no full-range clips: npm run clips)'} and given to the decoder config`);
 }
 console.log('all good');

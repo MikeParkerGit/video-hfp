@@ -80,6 +80,7 @@ export class Bridge {
     this.displayWidth = shape.displayWidth; this.displayHeight = shape.displayHeight;
     this.frameBytes = shape.frameBytes;
     this.layout = null;              // the plane layout copyTo reported (the same for every frame)
+    this.colorSpace = null;          // the decoded frames' colour space, given back to every rebuilt frame (else YUV is read as BT.709 limited range)
     this.buffer = new ArrayBuffer(shape.frameBytes * shape.count);
     this.filled = 0;
     this.closed = false;
@@ -93,6 +94,7 @@ export class Bridge {
     const i = index - this.frame;
     const init = { format: this.format, codedWidth: this.codedWidth, codedHeight: this.codedHeight, timestamp: Math.round(this.clip.frameTime(index) * 1e6), displayWidth: this.displayWidth, displayHeight: this.displayHeight };
     if (this.layout) init.layout = this.layout;
+    if (this.colorSpace) init.colorSpace = this.colorSpace;
     return new VideoFrame(new Uint8Array(this.buffer, i * this.frameBytes, this.frameBytes), init);
   }
   close() { this.closed = true; this.buffer = null; }
@@ -126,14 +128,18 @@ export async function buildBridge(clip, frame, { count, floor = HARDWARE_FLOOR, 
         try {
           if (item.index !== frame + got) throw new Error(`bridge: expected frame ${frame + got}, the decoder gave ${item.index}`);
           const shape = bridge ? null : shapeOf(item.frame, count);
-          if (!bridge) { bridge = new Bridge(clip, frame, shape); bridge._rect = shape.rect; bridge._viaCanvas = shape.viaCanvas; }
+          if (!bridge) {
+            bridge = new Bridge(clip, frame, shape); bridge._rect = shape.rect; bridge._viaCanvas = shape.viaCanvas;
+            // planes as decoded: the clip's own colour space (the container's word), else what the decoder said; through a canvas: the canvas's (sRGB)
+            if (!shape.viaCanvas) bridge.colorSpace = clip.colorSpace ?? item.frame.colorSpace?.toJSON?.() ?? null;
+          }
           const dest = new Uint8Array(bridge.buffer, got * bridge.frameBytes, bridge.frameBytes);
           if (!bridge._viaCanvas) { const layout = await item.frame.copyTo(dest, { rect: bridge._rect }); bridge.layout ??= layout; }
           else {
             canvas ??= new OffscreenCanvas(bridge.codedWidth, bridge.codedHeight);
             canvas.getContext('2d').drawImage(item.frame, 0, 0);
             const f2 = new VideoFrame(canvas, { timestamp: 0 });
-            try { const layout = await f2.copyTo(dest); bridge.layout ??= layout; bridge.format = f2.format; } finally { f2.close(); }
+            try { const layout = await f2.copyTo(dest); bridge.layout ??= layout; bridge.format = f2.format; bridge.colorSpace ??= f2.colorSpace?.toJSON?.() ?? null; } finally { f2.close(); }
           }
         } finally { item.frame.close(); }
         got++; bridge.filled = got;

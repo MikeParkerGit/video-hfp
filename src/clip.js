@@ -28,6 +28,7 @@ export class Clip {
     this.displayWidth = this.rotation % 180 ? this.height : this.width;   // the upright size
     this.displayHeight = this.rotation % 180 ? this.width : this.height;
     this.description = v.description;
+    this.colorSpace = v.colorSpace || null;          // from the container (colr / vpcC / Colour): every decoder and every bridge frame uses it
     this.samples = v.samples;                      // decode order
     const n = this.frameCount = this.samples.length;
     if (!n) throw new Error('clip: no video frames');
@@ -130,6 +131,7 @@ export class Clip {
     // the low-latency hint only makes sense for a stream with no reordering; with B-frames some hardware decoders misbehave under it
     const cfg = { codec: this.codec, codedWidth: this.width, codedHeight: this.height, optimizeForLatency: this.reorderDepth === 0 };
     if (this.description) cfg.description = this.description;
+    if (this.colorSpace) cfg.colorSpace = this.colorSpace;   // overrides what a decoder makes of the bitstream: hardware, software and bridges agree
     return cfg;
   }
   async isSupported() {
@@ -138,7 +140,7 @@ export class Clip {
   }
   /** Everything a lightweight copy needs (a worker, a listing): no samples, no bytes. */
   describe() {
-    return { name: this.name, url: this.url, container: this.container, codec: this.codec, width: this.width, height: this.height, rotation: this.rotation, displayWidth: this.displayWidth, displayHeight: this.displayHeight, fps: this.fps, vfr: this.vfr,
+    return { name: this.name, url: this.url, container: this.container, codec: this.codec, width: this.width, height: this.height, rotation: this.rotation, colorSpace: this.colorSpace, displayWidth: this.displayWidth, displayHeight: this.displayHeight, fps: this.fps, vfr: this.vfr,
       frameCount: this.frameCount, gop: this.gop, keyframes: this.keyframes.length, duration: this.duration,
       audio: this.audio ? { codec: this.audio.codec, sampleRate: this.audio.sampleRate, channels: this.audio.channels } : null };
   }

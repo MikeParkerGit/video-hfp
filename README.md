@@ -178,6 +178,10 @@ them over, 1.5 bytes a pixel, one buffer per bridge), and releases the decoder. 
 bridge from the next display frame while the decoder that was playing the previous clip is
 **re-targeted** (reset, configured for the new clip, started from the keyframe before frame N)
 and takes over at N by the same two-source swap the loops use. Nothing is kept between cuts.
+Every frame rebuilt from a bridge carries the clip's colour space — read from the container (an MP4
+`colr` box, a `vpcC`, a WebM `Colour` element) and given to every decoder as well — so a hardware
+decoder, a software one and a bridge draw the same picture; phones record full-range video, which
+read as limited range shows with more contrast.
 
 N is a formula per target, from the clip's index (complete at load — every frame's keyframe
 flag is in the sample table) and a **hardware floor** profile, the slowest device the bridge is

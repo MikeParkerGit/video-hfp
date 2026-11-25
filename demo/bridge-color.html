@@ -1,0 +1,45 @@
+<!doctype html><meta charset="utf-8"><title>video-hfp — a bridge frame looks like the decoder's</title>
+<!-- the playback suite drives this page: the same frame decoded directly and rebuilt from a bridge must draw the same pixels,
+     full-range phone video included (?full=A-full.mp4&limited=A.mp4, or the .webm pair where there is no H.264) -->
+<pre id="out">…</pre>
+<script type="module">
+import { loadClip, FrameSource, buildBridge } from '../src/index.js';
+const q = new URLSearchParams(location.search);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const pixels = (frame) => { const c = new OffscreenCanvas(frame.displayWidth, frame.displayHeight); const x = c.getContext('2d'); x.drawImage(frame, 0, 0); return x.getImageData(0, 0, c.width, c.height).data; };
+const compare = async (name, at) => {
+  const clip = await loadClip(`clips/${name}`);
+  const src = new FrameSource(clip, { lookahead: 6 });
+  src.start({ from: at, to: at + 4, loop: false, startIndex: at });
+  let item = null;
+  for (let i = 0; i < 1000 && !(item = src.peek()); i++) await sleep(5);
+  if (!item) throw new Error(`no frame from the decoder for ${name}`);
+  const bridge = await buildBridge(clip, at, { count: 2 });
+  const rebuilt = bridge.frameAt(at);
+  const a = pixels(item.frame), b = pixels(rebuilt);
+  let diff = 0, n = 0, sa = 0, sb = 0;
+  for (let i = 0; i < a.length; i += 4 * 7) for (let k = 0; k < 3; k++) { diff += Math.abs(a[i + k] - b[i + k]); sa += a[i + k]; sb += b[i + k]; n++; }
+  const out = { meanAbsDiff: +(diff / n).toFixed(2), meanDecoder: +(sa / n).toFixed(1), meanBridge: +(sb / n).toFixed(1), format: bridge.format,
+    colorSpaceClip: clip.colorSpace, colorSpaceDecoder: item.frame.colorSpace?.toJSON?.() ?? null, colorSpaceBridge: rebuilt.colorSpace?.toJSON?.() ?? null };
+  out.pixels = a;   // kept for the comparison between the two clips below
+  rebuilt.close(); bridge.close(); src.close();
+  return out;
+};
+const probe = { done: false };
+try {
+  probe.full = await compare(q.get('full') || 'A-full.mp4', 30);
+  probe.limited = await compare(q.get('limited') || 'A.mp4', 30);
+  // the full-range clip is the same picture as the limited one: decoded with its colour space, the two draw (nearly) the same
+  const a = probe.full.pixels, b = probe.limited.pixels;
+  if (a.length === b.length) { let d = 0, n = 0; for (let i = 0; i < a.length; i += 4 * 7) for (let k = 0; k < 3; k++) { d += Math.abs(a[i + k] - b[i + k]); n++; } probe.fullVsLimited = +(d / n).toFixed(2); }
+  delete probe.full.pixels; delete probe.limited.pixels;
+  if (!/\.webm$/.test(q.get('full') || '') && q.get('vp9') !== '0') {   // the H.264 run also draws the VP9 pair: the cross-range check reads it
+    const fv = await compare('A-full.webm', 30), lv = await compare('A-vp9.webm', 30);
+    let d = 0, n = 0; for (let i = 0; i < fv.pixels.length; i += 4 * 7) for (let k = 0; k < 3; k++) { d += Math.abs(fv.pixels[i + k] - lv.pixels[i + k]); n++; }
+    probe.fullVsLimitedVp9 = +(d / n).toFixed(2);
+  }
+} catch (e) { probe.error = String(e && e.stack || e); }
+probe.done = true;
+window.__probe = probe;
+document.getElementById('out').textContent = JSON.stringify(probe, null, 1);
+</script>

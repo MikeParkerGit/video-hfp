@@ -4,10 +4,12 @@
 // Matroska, so this reads the whole file through the ByteSource (Cues only index clusters); a long
 // WebM therefore costs a full read to open, where an MP4 costs its moov.
 
+import { colorSpaceFromCodes } from '../color.js';
 const ID = {
   EBML: 0x1a45dfa3, Segment: 0x18538067, Info: 0x1549a966, TimecodeScale: 0x2ad7b1, Duration: 0x4489,
   Tracks: 0x1654ae6b, TrackEntry: 0xae, TrackNumber: 0xd7, TrackType: 0x83, CodecID: 0x86, CodecPrivate: 0x63a2,
   CodecDelay: 0x56aa, SeekPreRoll: 0x56bb, DefaultDuration: 0x23e383, Video: 0xe0, PixelWidth: 0xb0, PixelHeight: 0xba, Projection: 0x7671, ProjectionPoseRoll: 0x7675,
+  Colour: 0x55b0, MatrixCoefficients: 0x55b1, Range: 0x55b9, TransferCharacteristics: 0x55ba, Primaries: 0x55bb,
   Audio: 0xe1, SamplingFrequency: 0xb5, Channels: 0x9f, BitDepth: 0x6264,
   Cluster: 0x1f43b675, Timecode: 0xe7, SimpleBlock: 0xa3, BlockGroup: 0xa0, Block: 0xa1, BlockDuration: 0x9b, ReferenceBlock: 0xfb,
   Cues: 0x1c53bb6b, SeekHead: 0x114d9b74, Void: 0xec, Tags: 0x1254c367, Attachments: 0x1941a469, Chapters: 0x1043a770,
@@ -70,6 +72,13 @@ export async function demuxWebm(src) {
             case ID.Video: await parseChildren(r, tend, async (vid, vsize) => {
               if (vid === ID.PixelWidth) t.width = uintOf(await r.bytes(vsize));
               else if (vid === ID.PixelHeight) t.height = uintOf(await r.bytes(vsize));
+              else if (vid === ID.Colour) { const c = {}; await parseChildren(r, r.pos + vsize, async (cid, csize2) => {   // H.273 codes; Range 1 = broadcast (limited), 2 = full
+                if (cid === ID.MatrixCoefficients) c.matrix = uintOf(await r.bytes(csize2));
+                else if (cid === ID.TransferCharacteristics) c.transfer = uintOf(await r.bytes(csize2));
+                else if (cid === ID.Primaries) c.primaries = uintOf(await r.bytes(csize2));
+                else if (cid === ID.Range) { const v = uintOf(await r.bytes(csize2)); c.fullRange = v === 2 ? true : v === 1 ? false : null; }
+                else r.pos += csize2;
+              }); t.colorSpace = colorSpaceFromCodes(c); }
               else if (vid === ID.Projection) await parseChildren(r, r.pos + vsize, async (pid, psize) => {   // a roll is the only rotation Matroska carries
                 if (pid === ID.ProjectionPoseRoll) { const deg = ((Math.round(floatOf(await r.bytes(psize))) % 360) + 360) % 360; t.rotation = deg === 90 || deg === 180 || deg === 270 ? deg : 0; }
                 else r.pos += psize;
@@ -113,7 +122,7 @@ export async function demuxWebm(src) {
   const out = { container: 'webm', duration: duration * timecodeScale / 1e9, video: null, audio: null };
   const vb = blocks.filter((x) => x.track === video.number);
   const vdur = video.defaultDuration / 1e9;
-  out.video = { kind: 'video', ...videoCodec(video), codedWidth: video.width, codedHeight: video.height, rotation: video.rotation || 0, editOffset: 0, emptyEdit: 0, duration: 0, timescale: 1e9,
+  out.video = { kind: 'video', ...videoCodec(video), codedWidth: video.width, codedHeight: video.height, rotation: video.rotation || 0, colorSpace: video.colorSpace || null, editOffset: 0, emptyEdit: 0, duration: 0, timescale: 1e9,
     samples: vb.map((x, i) => { const d = x.duration || vdur || (i + 1 < vb.length ? Math.abs(vb[i + 1].time - x.time) : vdur); return { offset: x.offset, size: x.size, dts: x.time, pts: x.time, duration: d, durationUnits: Math.round(d * 1e9), key: x.key }; }) };
   // Matroska blocks are in decode order with presentation timestamps; dts is unknown, so synthesize one that
   // keeps decode order monotonic (the index only needs the order and the pts).

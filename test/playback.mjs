@@ -299,6 +299,34 @@ async function runTransitions() {
   run.consoleErrors = consoleErrors.splice(0);
   verdict.runs.push(run);
 }
+/**
+ * A bridge frame looks like the decoder's (bridge-color.html): full-range video (a phone's) keeps its colour space through the bridge —
+ * rebuilt frames used to be read as BT.709 limited range, so the picture changed brightness at every hand-off on a Pixel.
+ */
+async function runBridgeColor() {
+  const run = { label: 'colour: a bridge frame draws like the decoder\'s (full-range video, bridge-color.html)', ok: true, checks: {} };
+  const fail = (name, why) => { run.ok = verdict.ok = false; run.checks[name] = { ok: false, ...why }; };
+  const pass = (name, detail) => { run.checks[name] = { ok: true, ...detail }; };
+  try {
+    const h264 = support?.h264;
+    const full = h264 ? 'A-full.mp4' : 'A-full.webm';
+    if (!existsSync(path.join(ROOT, 'demo/clips', full))) { run.skipped = `no ${full} (npm run clips)`; verdict.runs.push(run); return; }
+    await send('Page.navigate', { url: `http://localhost:${port}/demo/bridge-color.html?full=${full}&limited=${h264 ? 'A.mp4' : 'A-vp9.webm'}` });
+    const r = await waitProbe(60000);
+    if (r.error) throw new Error(r.error);
+    const f = r.full || {};
+    if (!(f.colorSpaceClip?.fullRange === true && f.colorSpaceDecoder?.fullRange === true && f.colorSpaceBridge?.fullRange === true && f.meanAbsDiff <= 2)) fail('fullRange', f); else pass('fullRange', { meanAbsDiff: f.meanAbsDiff, colorSpace: f.colorSpaceBridge });
+    const l = r.limited || {};
+    if (!(l.meanAbsDiff <= 2 && l.colorSpaceBridge?.fullRange !== true)) fail('limitedRange', l); else pass('limitedRange', { meanAbsDiff: l.meanAbsDiff });
+    // the same picture recorded in the two ranges draws the same — checked on VP9 (an H.264 clip's BT.709 transfer tags are colour-managed by some browsers)
+    if (!h264 || r.fullVsLimitedVp9 != null) {
+      const v = h264 ? r.fullVsLimitedVp9 : r.fullVsLimited;
+      if (!(v <= 3)) fail('sameAsLimited', { fullVsLimited: v }); else pass('sameAsLimited', { fullVsLimited: v });
+    }
+  } catch (e) { run.ok = verdict.ok = false; run.error = e.message; }
+  run.consoleErrors = consoleErrors.splice(0);
+  verdict.runs.push(run);
+}
 /** A rotated clip (a phone's portrait recording: a 90° display matrix) draws upright: the element's size and the canvas are portrait. */
 async function runRotated() {
   const run = { label: 'rotation (A-rot.mp4: a 90° display matrix, drawn upright)', ok: true, checks: {} };
@@ -342,6 +370,7 @@ try {
   await runCompat();
   await runRotated();
   await runTransitions();
+  await runBridgeColor();
   runGesture();
   const ran = verdict.runs.filter((r) => !r.skipped);
   if (!ran.length) verdict.ok = false;

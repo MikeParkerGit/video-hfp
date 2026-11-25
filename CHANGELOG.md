@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.0-beta.9 — 2026-11-25
+- **A bridge frame draws like the decoder's.** Frames rebuilt from a bridge's planes had no colour space, so WebCodecs read them as BT.709 limited range. Phones record full-range video (`yuvj420p`, an MP4 `colr nclx … full_range 1`): on a Pixel the hardware decoder showed it as full range and the bridge as limited — more contrast, a visible brightness change at every hand-off (Simon Movies). Both demuxers now read the clip's colour space (MP4 `colr` nclx/nclc, `vpcC`; WebM `Colour`: matrix, transfer, primaries, range — `src/color.js` maps the H.273 codes), `decoderConfig()` gives it to every decoder (hardware, software, the probe), and every rebuilt bridge frame carries it (a canvas-copied bridge keeps the canvas's sRGB). `Clip.colorSpace`; `describe()` reports it.
+- Test clips `A-full.mp4` / `A-full.webm` (full range, tagged like a phone's); `bridge-color.html` and the suite check the clip's colour space reaches the decoder's and the bridge's frames, that the two draw the same, and that full-range VP9 draws like its limited twin (1.0 against 9.0 before).
+
 ## 0.2.0-beta.8 — 2026-11-25
 - **Swipes no longer flicker on Android.** The canvas was created with the low-latency `desynchronized` hint, which Chrome honours on Android: each draw call reached the screen as it happened. One draw per frame never showed it; a transition resizes the canvas when it starts and clears and draws twice every frame, so the cleared and half-composed states flashed for the first frames of a swipe (Simon Movies on a Pixel). The context is a normal one now — frames are drawn in requestAnimationFrame, so they still show on that display frame — and the suite checks it.
 
