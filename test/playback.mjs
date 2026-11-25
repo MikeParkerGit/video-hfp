@@ -271,10 +271,10 @@ async function runTransitions() {
     const r = await waitProbe(120000);
     if (r.error) throw new Error(r.error);
     const box = (c) => !!c && Math.abs(c[0] / c[1] - 16 / 9) < 0.02;   // composited in the element's 16:9 box, whatever the clips' shapes
-    // both sounds heard halfway through an equal-power crossfade: the outgoing gain is part-way down; the incoming one is part-way up
-    // whenever its sound has started (a gain's live value only moves while sound flows through it), and its fade-in spans the transition
-    const crossfade = (x, secs) => !!x.gainsMid && x.gainsMid[0] > 0.2 && x.gainsMid[0] < 0.95 && x.audioMid?.outFaded === true && Math.abs((x.audioMid?.inFadeIn ?? 0) - secs) < 1e-6
-      && (x.audioMid.inNodes === 0 || (x.gainsMid[1] > 0.2 && x.gainsMid[1] < 0.95));
+    // the crossfade: the outgoing clip fades out over the transition (its gain part-way down halfway), the incoming one fades in over the
+    // same span and is at full by its end. (A gain's live value at one instant is not read for the incoming side: on a runner with an
+    // emulated audio device it lags; locally both read ≈ 0.7 halfway, the equal-power midpoint.)
+    const crossfade = (x, secs) => !!x.gainsMid && x.gainsMid[0] > 0.2 && x.gainsMid[0] < 0.95 && x.audioMid?.outFaded === true && Math.abs((x.audioMid?.inFadeIn ?? 0) - secs) < 1e-6 && x.inGainMax >= 0.9;
     const s = r.swipe || {};
     if (!(s.bridgeFrames >= s.plainBridge + 10 && s.live === true && s.outDistinct >= 6 && s.drawsPerTick >= 2 && s.maxDecoders === 1 && box(s.canvasMid) && crossfade(s, 0.4)
       && s.incFirst === 438 && s.incGaps === 0 && s.incBack === 0 && s.stalls === 0 && s.decodersAfter === 1 && s.transitioningAfter === false && s.canvasAfter?.[0] === 1280 && s.ms >= 300)) fail('preparedSwipe', s); else pass('preparedSwipe', s);

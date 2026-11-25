@@ -206,8 +206,10 @@ class AudioSegment {
     this.gain.connect(engine.master);
     const t0 = Math.max(0, spec.ctxTime(spec.tStart));
     if (spec.fadeIn > FADE) {
-      this.gain.gain.value = 0;
-      try { this.gain.gain.setValueCurveAtTime(FADE_IN, t0, spec.fadeIn); } catch { this.gain.gain.setValueAtTime(0, t0); this.gain.gain.linearRampToValueAtTime(1, t0 + spec.fadeIn); }
+      // silent until the fade starts; a fade scheduled late still ends with the transition, not a fade-length after it
+      const g = this.gain.gain, now = engine.ctx.currentTime, start = Math.max(t0, now), end = t0 + spec.fadeIn;
+      g.setValueAtTime(0, now);
+      try { g.setValueCurveAtTime(FADE_IN, start + 1e-4, Math.max(0.01, end - start)); } catch { g.linearRampToValueAtTime(1, Math.max(end, start + 0.01)); }
     } else {
       this.gain.gain.setValueAtTime(0, t0);
       this.gain.gain.linearRampToValueAtTime(1, t0 + FADE);
